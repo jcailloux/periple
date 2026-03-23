@@ -6,10 +6,10 @@
 
 namespace periple {
 
-template <DistanceSource Dist>
+template <DistanceSource Dist, typename TourCost = DefaultTourCost>
 class SolverTestAccess {
 public:
-	explicit SolverTestAccess(const Solver<Dist>& solver) : s_(solver) {}
+	explicit SolverTestAccess(const Solver<Dist, TourCost>& solver) : s_(solver) {}
 
 	// Returns true if position_[tour_[i]] == i for all i.
 	bool position_consistent() const {
@@ -21,7 +21,10 @@ public:
 	}
 
 private:
-	const Solver<Dist>& s_;
+	const Solver<Dist, TourCost>& s_;
 };
+
+template <DistanceSource Dist, typename TourCost>
+SolverTestAccess(const Solver<Dist, TourCost>&) -> SolverTestAccess<Dist, TourCost>;
 
 } // namespace periple

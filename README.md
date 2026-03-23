@@ -122,6 +122,23 @@ Algorithm methods return `Solver&` for chaining:
 solver.nearest_neighbor().two_opt();
 ```
 
+### Callbacks & variants
+
+Customize algorithm behavior without modifying internal logic. Callbacks are optional and zero-overhead when not used.
+
+```cpp
+#include <periple/variants/tsptw.hpp>
+
+// TSPTW: reject moves that violate time windows
+periple::tsptw::Strict tw(dist, windows);
+solver.nearest_neighbor({}, tw);
+
+// Custom construction strategy
+solver.greedy_construct(MySelector{}, my_callbacks);
+```
+
+See [CALLBACKS.md](CALLBACKS.md) for the full reference: the 5 callbacks, move types, selectors, partial tours, and how to write your own variants.
+
 ### Available algorithms
 
 | Algorithm | Category | Complexity |
@@ -226,8 +243,10 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 | Method | Description |
 |--------|-------------|
 | `Solver(dist)` | Create a solver bound to a distance source (template deduced) |
+| `Solver(dist, tour_cost)` | Create with a custom tour cost function |
 | `Solver()` | Create an empty solver (requires explicit template parameter) |
 | `set_matrix(dist)` | Bind (or rebind) to a distance source, clearing any solution |
+| `set_tour_cost(tc)` | Set or change the tour cost function |
 | `clear()` | Clear the current solution, keep the distance source |
 | `reset()` | Reset to default-constructed state |
 
@@ -235,11 +254,11 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `status()` | `SolutionStatus` | `none`, `feasible`, or `optimal` |
+| `status()` | `SolutionStatus` | `none`, `partial`, `feasible`, or `optimal` |
 | `tour()` | `span<const city_type>` | Zero-copy view of the current tour |
 | `cost()` | `cost_type` | Cost of the current tour |
 | `size()` | `std::size_t` | Number of cities |
-| `set_tour(span)` | `void` | Inject an external tour |
+| `set_tour(span)` | `void` | Inject a tour (full or partial prefix) |
 
 ### Algorithms
 
@@ -247,8 +266,9 @@ All algorithm methods return `Solver&` for chaining. Each accepts an optional pa
 
 | Method | Default parameters |
 |--------|--------------------|
-| `nearest_neighbor(params)` | `{.start_city = 0}` |
+| `nearest_neighbor(params, callbacks)` | `{.start_city = 0}`, `DefaultCallbacks{}` |
 | `held_karp(params)` | `{}` |
+| `greedy_construct(selector, callbacks, params)` | `NearestSelector{}`, `DefaultCallbacks{}`, `{.start_city = 0}` |
 
 </details>
 

@@ -16,4 +16,9 @@ target_compile_definitions(test_tsplib_parser PRIVATE
     PERIPLE_INSTANCES_DIR="${CMAKE_SOURCE_DIR}/benchmarks/instances")
 add_test(NAME tsplib_parser COMMAND test_tsplib_parser)
 
+add_executable(test_callbacks test_callbacks.cpp)
+target_link_libraries(test_callbacks PRIVATE periple::periple)
+target_include_directories(test_callbacks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME callbacks COMMAND test_callbacks)
+
 add_subdirectory(algorithms)

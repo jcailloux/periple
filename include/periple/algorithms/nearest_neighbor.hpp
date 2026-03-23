@@ -1,6 +1,7 @@
 #pragma once
 
 #include <periple/core/solver.hpp>
+#include <periple/strategies/constructive/nearest.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -9,68 +10,138 @@
 namespace periple {
 namespace detail {
 
-template <DistanceSource Dist>
-auto nearest_neighbor_build(
-	const Dist& dist,
-	const std::size_t n,
-	const typename dist_traits<Dist>::city_type start,
+// Generic append-based construction loop.
+// Expects tour[0..start_step) and visited to be set by the caller.
+// Does not compute cost; the Solver wrapper handles that.
+template <DistanceSource Dist, typename Selector, typename Callbacks>
+void greedy_append_build(
+	const Dist& dist, std::size_t n, std::size_t start_step,
 	std::span<typename dist_traits<Dist>::city_type> tour,
-	std::span<uint8_t> visited
-) -> typename dist_traits<Dist>::cost_type
+	std::span<uint8_t> visited,
+	const Selector& select, const Callbacks& cb)
 {
 	using cost_type = typename dist_traits<Dist>::cost_type;
 	using city_type = typename dist_traits<Dist>::city_type;
 
-	if (n < 2) {
-		if (n == 1) tour[0] = start;
-		return cost_type{};
-	}
-
-	std::ranges::fill(visited.first(n), uint8_t{0});
-
-	tour[0] = start;
-	visited[static_cast<std::size_t>(start)] = 1;
-	cost_type total_cost{};
-
-	for (std::size_t step = 1; step < n; ++step) {
-		city_type current = tour[step - 1];
-		cost_type best_cost = std::numeric_limits<cost_type>::max();
+	for (std::size_t step = start_step; step < n; ++step) {
+		auto partial = std::span<const city_type>(tour.data(), step);
+		cost_type best_score = std::numeric_limits<cost_type>::max();
 		city_type best_city{};
+		bool found = false;
 
 		for (std::size_t j = 0; j < n; ++j) {
 			if (visited[j]) continue;
-			cost_type c = dist(current, static_cast<city_type>(j));
-			if (c < best_cost) {
-				best_cost = c;
-				best_city = static_cast<city_type>(j);
+			auto candidate = static_cast<city_type>(j);
+
+			if constexpr (requires(const Callbacks& c, std::span<const city_type> t,
+			                       const AppendMove<city_type>& m) {
+				{ c.move_filter(t, m) } -> std::convertible_to<bool>;
+			}) {
+				if (!cb.move_filter(partial, AppendMove<city_type>{candidate}))
+					continue;
+			}
+
+			cost_type score = select.evaluate(dist, partial, candidate, cb);
+			if (!found || score < best_score) {
+				best_score = score;
+				best_city = candidate;
+				found = true;
+			}
+		}
+
+		// Fallback: if all candidates were filtered, pick first unvisited.
+		if (!found) {
+			for (std::size_t j = 0; j < n; ++j) {
+				if (!visited[j]) {
+					best_city = static_cast<city_type>(j);
+					break;
+				}
 			}
 		}
 
 		tour[step] = best_city;
 		visited[static_cast<std::size_t>(best_city)] = 1;
-		total_cost += best_cost;
-	}
 
-	total_cost += dist(tour[n - 1], start);
-	return total_cost;
+		if constexpr (requires(const Callbacks& c, std::span<const city_type> t,
+		                       const AppendMove<city_type>& m) {
+			c.on_commit(t, m);
+		}) {
+			cb.on_commit(std::span<const city_type>(tour.data(), step + 1),
+			             AppendMove<city_type>{best_city});
+		}
+	}
 }
 
 } // namespace detail
 
-template <DistanceSource Dist>
-inline auto Solver<Dist>::nearest_neighbor(NearestNeighborParams params)
+// ---------------------------------------------------------------------------
+// Solver::greedy_construct -- generic append-based construction
+// ---------------------------------------------------------------------------
+
+template <DistanceSource Dist, typename TourCost>
+template <typename Selector, typename Callbacks>
+auto Solver<Dist, TourCost>::greedy_construct(
+	const Selector& sel, const Callbacks& cb, ConstructParams params)
 	-> Solver&
 {
-	n_ = dist_->size();
-	ensure_shared(n_);
-	cost_ = detail::nearest_neighbor_build(
-		*dist_, n_,
-		static_cast<city_type>(params.start_city),
-		std::span<city_type>(tour_.data(), n_),
-		std::span<uint8_t>(visited_.data(), n_));
+	assert(dist_);
+	const auto n = dist_->size();
+	ensure_shared(n);
+
+	std::size_t start_step;
+
+	if (status_ == SolutionStatus::partial) {
+		// Continue from partial tour.  visited_ and tour_[0..n_) are set.
+		start_step = n_;
+	} else {
+		if (n == 0) {
+			n_ = 0;
+			cost_ = {};
+			status_ = SolutionStatus::feasible;
+			return *this;
+		}
+		// Fresh build: place start city.
+		std::fill_n(visited_.data(), n, uint8_t{0});
+		auto start = static_cast<city_type>(params.start_city);
+		tour_[0] = start;
+		visited_[params.start_city] = 1;
+		start_step = 1;
+
+		// Notify on_commit for the start city.
+		if constexpr (requires(const Callbacks& c, std::span<const city_type> t,
+		                       const AppendMove<city_type>& m) {
+			c.on_commit(t, m);
+		}) {
+			cb.on_commit(std::span<const city_type>(tour_.data(), 1),
+			             AppendMove<city_type>{start});
+		}
+	}
+
+	detail::greedy_append_build(
+		*dist_, n, start_step,
+		std::span<city_type>(tour_.data(), n),
+		std::span<uint8_t>(visited_.data(), n),
+		sel, cb);
+
+	n_ = n;
+	cost_ = compute_tour_cost(std::span<const city_type>(tour_.data(), n));
 	status_ = SolutionStatus::feasible;
 	rebuild_position();
 	return *this;
+}
+
+// ---------------------------------------------------------------------------
+// Solver::nearest_neighbor -- facade using NearestSelector
+// ---------------------------------------------------------------------------
+
+template <DistanceSource Dist, typename TourCost>
+template <typename Callbacks>
+auto Solver<Dist, TourCost>::nearest_neighbor(
+	NearestNeighborParams params, const Callbacks& cb)
+	-> Solver&
+{
+	return greedy_construct(NearestSelector{}, cb,
+	                        ConstructParams{.start_city = params.start_city});
 }
 
 } // namespace periple

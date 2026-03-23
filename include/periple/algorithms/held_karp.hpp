@@ -88,8 +88,8 @@ auto held_karp_solve(
 
 } // namespace detail
 
-template <DistanceSource Dist>
-inline auto Solver<Dist>::held_karp(HeldKarpParams) -> Solver&
+template <DistanceSource Dist, typename TourCost>
+inline auto Solver<Dist, TourCost>::held_karp(HeldKarpParams) -> Solver&
 {
 	n_ = dist_->size();
 	ensure_shared(n_);
@@ -101,11 +101,13 @@ inline auto Solver<Dist>::held_karp(HeldKarpParams) -> Solver&
 	hk_cache_->dp.resize(table_sz);
 	hk_cache_->parent.resize(table_sz);
 
-	cost_ = detail::held_karp_solve(
+	detail::held_karp_solve(
 		*dist_, n_,
 		std::span<city_type>(tour_.data(), n_),
 		std::span<cost_type>(hk_cache_->dp.data(), table_sz),
 		std::span<city_type>(hk_cache_->parent.data(), table_sz));
+
+	cost_ = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
 	status_ = SolutionStatus::optimal;
 	rebuild_position();
 	return *this;
