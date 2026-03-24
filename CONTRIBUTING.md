@@ -165,12 +165,13 @@ In `core/registry.hpp`, add a descriptor struct and append it to the `AllAlgorit
 struct AlgoTwoOpt {
     static constexpr const char* tag  = "2O";
     static constexpr const char* name = "two_opt";
-    static constexpr bool is_exact       = false;
-    static constexpr bool symmetric_only = false;
-    static constexpr int  max_tier       = 5;
+    static constexpr bool is_exact          = false;
+    static constexpr bool symmetric_only    = false;
+    static constexpr bool is_metaheuristic  = false;
+    static constexpr int  max_tier          = 5;
 
     template <DistanceSource Dist>
-    void operator()(Solver<Dist>& s) const { s.two_opt(); }
+    void operator()(Solver<Dist>& s, unsigned = 0) const { s.two_opt(); }
 };
 
 using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoTwoOpt>;
@@ -188,7 +189,7 @@ cmake --build .build/debug
 ```
 
 <details>
-<summary><b>Step 6: Add an algorithm-specific cache (if needed)</b></summary>
+<summary><b>Optional: Add an algorithm-specific cache</b></summary>
 
 If the algorithm needs persistent state across calls (DP tables, populations, etc.), follow these three steps:
 
@@ -333,7 +334,7 @@ The automated suite covers the common contract. If your algorithm has specific b
 | Param struct | `AlgorithmNameParams` (PascalCase) | `NearestNeighborParams`, `TwoOptParams` |
 | Cache struct | `AbbreviationCache` (PascalCase) | `HKCache`, `LKCache`, `GACache` |
 | Cache file | `abbreviation_cache.hpp` | `hk_cache.hpp`, `lk_cache.hpp` |
-| Algorithm header | `algorithm_name.hpp` | `nearest_neighbor.hpp`, `two_opt.hpp` |
+| Algorithm header | `algorithm_name.hpp` | `greedy_construct.hpp`, `two_opt.hpp` |
 | Registry struct | `AlgoAlgorithmName` (PascalCase) | `AlgoNearestNeighbor`, `AlgoTwoOpt` |
 
 Detail function verbs by category:

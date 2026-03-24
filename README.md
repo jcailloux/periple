@@ -137,14 +137,19 @@ solver.nearest_neighbor({}, tw);
 solver.greedy_construct(MySelector{}, my_callbacks);
 ```
 
-See [CALLBACKS.md](CALLBACKS.md) for the full reference: the 5 callbacks, move types, selectors, partial tours, and how to write your own variants.
+See [CALLBACKS.md](CALLBACKS.md) for the callback mechanism (selectors, move types, partial tours) and [VARIANTS.md](VARIANTS.md) for pre-built variants (TSPTW, etc.).
 
 ### Available algorithms
 
-| Algorithm | Category | Complexity |
-|-----------|----------|------------|
-| Nearest neighbor | Construction | O(n^2) |
-| Held-Karp | Exact | O(n^2 * 2^n) |
+| Algorithm | Category | Complexity | ATSP support |
+|-----------|----------|------------|--------------|
+| Nearest neighbor | Construction | O(n^2) | full |
+| Held-Karp | Exact | O(n^2 * 2^n) | full |
+
+ATSP support: **full** = native asymmetric support, **adapted** = supported with different characteristics, **not yet** = symmetric only (use `jonker_volgenant()` to wrap your matrix).
+
+> [!WARNING]
+> Per-move callbacks defined for an ATSP instance are not compatible with the symmetric problem obtained via `jonker_volgenant()`.
 
 ### Selective includes
 
@@ -205,6 +210,7 @@ int nn_cost = solver.cost();
 // Your algorithm
 auto my_tour = my_algorithm(dist);
 solver.set_tour(my_tour);
+int my_cost = solver.cost();
 
 std::printf("NN: %d  Mine: %d  Improvement: %.2f%%\n",
     nn_cost, my_cost,

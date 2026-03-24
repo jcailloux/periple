@@ -1,5 +1,9 @@
 #pragma once
 
+// Jonker-Volgenant ATSP-to-STSP transformation
+//
+// Jonker, Volgenant (1983), "Transforming Asymmetric into Symmetric Traveling Salesman Problems"
+
 #include <periple/core/traits.hpp>
 
 #include <cassert>

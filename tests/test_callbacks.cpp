@@ -266,6 +266,157 @@ void test_set_tour_empty() {
 }
 
 // ---------------------------------------------------------------------------
+// Unit: move_eval changes selection metric
+// ---------------------------------------------------------------------------
+
+struct DistancePlusBias {
+	// Adds a large bias to city 1, making it unattractive.
+	double move_eval(std::span<const std::size_t> tour,
+	                 const AppendMove<std::size_t>& m) const {
+		return m.city == 1 ? 9999.0 : 0.0;
+	}
+};
+
+void test_move_eval_changes_selection() {
+	auto mat = make_mat4();
+
+	// Without move_eval: NN from 0 picks city 1 (dist 10, nearest).
+	Solver ref(mat);
+	ref.nearest_neighbor();
+	assert(ref.tour()[1] == 1);
+
+	// With move_eval: city 1 gets score 9999, others get 0.
+	// NN picks any city with score 0 instead of city 1.
+	DistancePlusBias cb;
+	Solver solver(mat);
+	solver.nearest_neighbor({}, cb);
+	assert(solver.tour()[1] != 1);
+}
+
+// ---------------------------------------------------------------------------
+// Unit: move_score overrides move_eval
+// ---------------------------------------------------------------------------
+
+struct EvalAndScore {
+	// move_eval says city 2 is bad.
+	double move_eval(std::span<const std::size_t>,
+	                 const AppendMove<std::size_t>& m) const {
+		return m.city == 2 ? 9999.0 : 0.0;
+	}
+	// move_score says city 2 is good (overrides move_eval for decisions).
+	double move_score(std::span<const std::size_t>,
+	                  const AppendMove<std::size_t>& m) const {
+		return m.city == 2 ? -1.0 : 100.0;
+	}
+};
+
+void test_move_score_overrides_eval() {
+	auto mat = make_mat4();
+
+	EvalAndScore cb;
+	Solver solver(mat);
+	solver.nearest_neighbor({}, cb);
+
+	// move_score gives city 2 the best score (-1), so it should be picked first.
+	assert(solver.tour()[1] == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Unit: score type deduction (double move_score on int matrix)
+// ---------------------------------------------------------------------------
+
+struct FractionalScore {
+	double move_score(std::span<const std::size_t>,
+	                  const AppendMove<std::size_t>& m) const {
+		// Fractional scores that would be truncated to 0 if cast to int.
+		if (m.city == 1) return 0.3;
+		if (m.city == 2) return 0.1;  // best
+		return 0.5;
+	}
+};
+
+void test_score_type_deduction() {
+	auto mat = make_mat4();
+	FractionalScore cb;
+	Solver solver(mat);
+	solver.nearest_neighbor({}, cb);
+
+	// City 2 has the lowest score (0.1).  If scores were truncated to int,
+	// cities 1 and 2 would both be 0 and the result would depend on iteration
+	// order.  With correct double deduction, city 2 wins deterministically.
+	assert(solver.tour()[1] == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Unit: partial tour completion with callbacks
+// ---------------------------------------------------------------------------
+
+void test_partial_tour_with_callbacks() {
+	auto mat = make_mat4();
+
+	std::vector<std::size_t> prefix = {0, 2};
+	LoggingCallbacks cb;
+	Solver solver(mat);
+	solver.set_tour(prefix);
+	solver.nearest_neighbor({}, cb);
+
+	// Prefix preserved.
+	assert(solver.tour()[0] == 0);
+	assert(solver.tour()[1] == 2);
+	assert(solver.status() == SolutionStatus::feasible);
+
+	// on_commit called only for newly placed cities (not for prefix).
+	// 2 new cities placed -> 2 on_commit calls.
+	std::size_t commit_count = 0;
+	for (const auto& e : cb.log)
+		if (e == "on_commit") ++commit_count;
+	assert(commit_count == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Unit: set_tour_cost method
+// ---------------------------------------------------------------------------
+
+void test_set_tour_cost() {
+	auto mat = make_mat4();
+	DoubleCost tc;
+
+	// Construct without tour_cost, then set it.
+	Solver solver(mat, tc);
+	solver.nearest_neighbor();
+	auto cost_with = solver.cost();
+
+	Solver ref(mat);
+	ref.nearest_neighbor();
+
+	assert(cost_with == ref.cost() * 2);
+}
+
+// ---------------------------------------------------------------------------
+// Unit: asymmetric matrix with callbacks
+// ---------------------------------------------------------------------------
+
+void test_asymmetric_with_callbacks() {
+	DistanceMatrix<int> mat(3, {
+		0, 5, 8,
+		12, 0, 3,
+		6, 14, 0
+	});
+
+	LoggingCallbacks cb;
+	Solver solver(mat);
+	solver.nearest_neighbor({}, cb);
+
+	assert(solver.tour().size() == 3);
+
+	// Callbacks were invoked.
+	std::size_t commit_count = 0;
+	for (const auto& e : cb.log)
+		if (e == "on_commit") ++commit_count;
+	assert(commit_count == 3);
+}
+
+// ---------------------------------------------------------------------------
 // Functional: TSPTW Strict on NN
 // ---------------------------------------------------------------------------
 
@@ -352,6 +503,124 @@ void test_tsptw_relaxed_hk() {
 }
 
 // ---------------------------------------------------------------------------
+// Functional: TSPTW multi-window
+// ---------------------------------------------------------------------------
+
+void test_tsptw_strict_multi_window() {
+	// 3 cities.  City 1 has two windows: [0,2] and [8,20].
+	// dist(0,1) = 5 -> arrival at 5, between windows.
+	// Window [0,2]: 5 > 2, closed.
+	// Window [8,20]: 5 <= 20, feasible (wait until 8).
+	SymmetricDistanceMatrix<int> mat({
+		{0, 5, 3},
+		{5, 0, 4},
+		{3, 4, 0}
+	});
+
+	std::vector<std::vector<tsptw::TimeWindow>> windows = {
+		{{0, 100}},            // city 0: always open
+		{{0, 2}, {8, 20}},     // city 1: closed 2-8
+		{{0, 100}},            // city 2: always open
+	};
+
+	tsptw::Strict tw(mat, windows);
+	Solver solver(mat);
+	solver.nearest_neighbor({}, tw);
+
+	// NN from 0: candidates {1, 2}.
+	// 0->2: dist=3, arrival=3, window [0,100] OK. Nearest.
+	// 0->1: dist=5, arrival=5, window [0,2] closed, [8,20] OK (wait).
+	// NN picks 0->2 (dist 3 < dist 5).
+	// From 2: candidate {1}.
+	// 2->1: depart from 2 = max(3, 0) = 3, arrival = 3+4 = 7.
+	// Window [0,2]: 7 > 2, closed. Window [8,20]: 7 <= 20, OK.
+	assert(solver.tour()[0] == 0);
+	assert(solver.tour().size() == 3);
+
+	// Both cities visited despite city 1's gap.
+	bool has_1 = false;
+	for (auto c : solver.tour())
+		if (c == 1) has_1 = true;
+	assert(has_1);
+}
+
+void test_tsptw_strict_multi_window_reject() {
+	// City 1 has two windows, both too tight for arrival from city 0.
+	SymmetricDistanceMatrix<int> mat({
+		{0, 10, 3},
+		{10, 0, 4},
+		{3, 4, 0}
+	});
+
+	std::vector<std::vector<tsptw::TimeWindow>> windows = {
+		{{0, 100}},            // city 0
+		{{0, 2}, {4, 6}},      // city 1: both windows too early for dist=10
+		{{0, 100}},            // city 2
+	};
+
+	tsptw::Strict tw(mat, windows);
+	Solver solver(mat);
+	solver.nearest_neighbor({}, tw);
+
+	// From 0: 0->1 arrival=10, both windows latest=2 and 6 < 10. Rejected.
+	// 0->2 arrival=3, OK. Pick 2.
+	assert(solver.tour()[1] == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Unit: neighbor lists
+// ---------------------------------------------------------------------------
+
+void test_neighbors_basic() {
+	auto mat = make_mat4();
+	Solver solver(mat);
+
+	// k=1: nearest neighbor of each city.
+	// Distances from 0: {1:10, 2:15, 3:20} -> nearest is 1
+	auto n0 = solver.neighbors(0, 1);
+	assert(n0.size() == 1);
+	assert(n0[0] == 1);
+
+	// k=3: all other cities sorted by distance from 0.
+	auto n0_all = solver.neighbors(0, 3);
+	assert(n0_all.size() == 3);
+	assert(n0_all[0] == 1);  // dist 10
+	assert(n0_all[1] == 2);  // dist 15
+	assert(n0_all[2] == 3);  // dist 20
+}
+
+void test_neighbors_grow() {
+	auto mat = make_mat4();
+	Solver solver(mat);
+
+	// First request with k=1.
+	solver.neighbors(0, 1);
+
+	// Grow to k=2.
+	auto n = solver.neighbors(0, 2);
+	assert(n.size() == 2);
+	assert(n[0] == 1);
+	assert(n[1] == 2);
+}
+
+void test_neighbors_invalidate() {
+	auto mat = make_mat4();
+	SymmetricDistanceMatrix<int> mat2({
+		{0, 99, 1},
+		{99, 0, 50},
+		{1, 50, 0}
+	});
+
+	Solver solver(mat);
+	solver.neighbors(0, 1);
+
+	// Switch matrix: neighbors must be recomputed.
+	solver.set_matrix(mat2);
+	auto n = solver.neighbors(0, 1);
+	assert(n[0] == 2);  // dist(0,2)=1 is nearest in mat2
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -370,16 +639,31 @@ int main() {
 		{"custom_tour_cost_nn",          test_custom_tour_cost_nn},
 		{"custom_tour_cost_hk",          test_custom_tour_cost_hk},
 		{"custom_tour_cost_set_tour",    test_custom_tour_cost_set_tour},
+		// Unit - move_eval / move_score
+		{"move_eval_changes_selection",  test_move_eval_changes_selection},
+		{"move_score_overrides_eval",    test_move_score_overrides_eval},
+		{"score_type_deduction",         test_score_type_deduction},
 		// Unit - selector
 		{"custom_selector",              test_custom_selector},
 		// Unit - partial tours
 		{"partial_tour_completion",      test_partial_tour_completion},
+		{"partial_tour_with_callbacks",  test_partial_tour_with_callbacks},
 		{"set_tour_full",                test_set_tour_full},
 		{"set_tour_empty",               test_set_tour_empty},
+		// Unit - set_tour_cost
+		{"set_tour_cost",                test_set_tour_cost},
+		// Unit - asymmetric
+		{"asymmetric_with_callbacks",    test_asymmetric_with_callbacks},
 		// Functional - TSPTW
 		{"tsptw_strict_nn",              test_tsptw_strict_nn},
+		{"tsptw_strict_multi_window",    test_tsptw_strict_multi_window},
+		{"tsptw_strict_multi_window_reject", test_tsptw_strict_multi_window_reject},
 		{"tsptw_relaxed_nn",             test_tsptw_relaxed_nn},
 		{"tsptw_relaxed_hk",             test_tsptw_relaxed_hk},
+		// Unit - neighbor lists
+		{"neighbors_basic",              test_neighbors_basic},
+		{"neighbors_grow",               test_neighbors_grow},
+		{"neighbors_invalidate",         test_neighbors_invalidate},
 	};
 
 	for (const auto& t : tests) {

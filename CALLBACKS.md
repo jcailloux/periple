@@ -101,7 +101,7 @@ A selector defines the **strategy** (minimize, maximize, random). The **metric**
 **`NearestSelector`**: minimizes the metric. This is what `nearest_neighbor()` uses internally.
 
 ```cpp
-#include <periple/strategies/constructive/nearest.hpp>
+#include <periple/algorithms/nearest_neighbor.hpp>
 ```
 
 ### Custom selectors
@@ -152,62 +152,9 @@ solver.nearest_neighbor();                  // completes from the prefix
 
 When continuing from a partial tour, `on_commit` is only called for newly placed cities. If your callbacks maintain state (like arrival times), ensure they are consistent with the existing prefix before calling the algorithm.
 
-## Variants (problem-specific callbacks)
+## Variants
 
-Variants encode problem constraints (time windows, capacities, precedences) as callback structs.
-
-### TSPTW: Time Windows
-
-```cpp
-#include <periple/variants/tsptw.hpp>
-```
-
-#### Strict (hard constraints)
-
-Rejects infeasible moves via `move_filter`. Maintains arrival time cache via `on_commit`.
-
-```cpp
-periple::tsptw::TimeWindow windows[] = {
-    {0, 100},   // city 0: depot
-    {0,  50},   // city 1: must arrive by time 50
-    {10, 80},   // city 2: earliest 10, latest 80
-};
-
-periple::tsptw::Strict tw(matrix, windows);
-solver.nearest_neighbor({}, tw);
-```
-
-#### Relaxed (soft constraints)
-
-Adds penalty cost for time window violations via `tour_cost`. No move rejection.
-
-```cpp
-periple::tsptw::Relaxed tw(matrix, windows, /*penalty_weight=*/1000);
-periple::Solver solver(matrix, tw);     // tour_cost with penalties
-solver.nearest_neighbor();              // uses distance for selection
-```
-
-### Writing your own variant
-
-Implement a struct with the appropriate callback methods. Use `if constexpr` detection in your code to support multiple move types:
-
-```cpp
-struct MyVariant {
-    // Constructive: filter AppendMove
-    bool move_filter(std::span<const std::size_t> tour,
-                     const periple::AppendMove<std::size_t>& m) const {
-        // return false to reject
-    }
-
-    // Cache update after placement
-    void on_commit(std::span<const std::size_t> tour,
-                   const periple::AppendMove<std::size_t>& m) const {
-        // update internal caches
-    }
-
-    // Future: also handle TwoOptMove, OrOptMove, etc.
-};
-```
+Pre-built callback structs for common TSP variants (TSPTW, etc.) are documented in [VARIANTS.md](VARIANTS.md).
 
 ## Applicability by algorithm family
 

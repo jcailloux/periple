@@ -58,6 +58,12 @@ public:
 	auto cost()   const -> cost_type;
 	void set_tour(std::span<const city_type> tour);
 
+	// --- Neighbor lists -----------------------------------------------------
+
+	// Returns the k nearest neighbors of city, sorted by distance.
+	// Computed lazily on first call; grows if k exceeds previous requests.
+	auto neighbors(city_type city, std::size_t k) -> std::span<const city_type>;
+
 	// --- Algorithms (defined inline in algorithms/*.hpp) --------------------
 
 	template <typename Callbacks = DefaultCallbacks>
@@ -76,6 +82,7 @@ public:
 
 private:
 	void ensure_shared(std::size_t n);
+	void ensure_neighbors(std::size_t k);
 	void rebuild_position();
 	void invalidate_caches();
 	auto compute_tour_cost(std::span<const city_type> t) const -> cost_type;
@@ -93,6 +100,7 @@ private:
 	std::vector<uint8_t>   visited_;
 	std::vector<uint8_t>   dont_look_;
 	std::vector<city_type> neighbors_;
+	std::size_t            neighbors_k_ = 0;
 
 	// Algorithm caches (lazy, one per algorithm that needs persistent state)
 	std::optional<HKCache<cost_type, city_type>> hk_cache_;
@@ -224,6 +232,49 @@ void Solver<Dist, TourCost>::rebuild_position() {
 template <DistanceSource Dist, typename TourCost>
 void Solver<Dist, TourCost>::invalidate_caches() {
 	if (hk_cache_) hk_cache_->reset();
+	neighbors_k_ = 0;
+}
+
+template <DistanceSource Dist, typename TourCost>
+auto Solver<Dist, TourCost>::neighbors(city_type city, std::size_t k)
+	-> std::span<const city_type>
+{
+	assert(dist_);
+	assert(k < dist_->size());
+	ensure_neighbors(k);
+	return {neighbors_.data() +
+		static_cast<std::size_t>(city) * neighbors_k_, k};
+}
+
+template <DistanceSource Dist, typename TourCost>
+void Solver<Dist, TourCost>::ensure_neighbors(std::size_t k) {
+	if (k <= neighbors_k_) return;
+
+	const auto n = dist_->size();
+	neighbors_k_ = k;
+	neighbors_.resize(n * k);
+
+	// Temporary buffer for sorting candidates.
+	std::vector<city_type> candidates(n - 1);
+
+	for (std::size_t i = 0; i < n; ++i) {
+		// Fill with all cities except i.
+		std::size_t idx = 0;
+		for (std::size_t j = 0; j < n; ++j)
+			if (j != i) candidates[idx++] = static_cast<city_type>(j);
+
+		std::partial_sort(candidates.begin(),
+		                  candidates.begin() + static_cast<std::ptrdiff_t>(k),
+		                  candidates.end(),
+			[&](city_type a, city_type b) {
+				return (*dist_)(static_cast<city_type>(i), a) <
+				       (*dist_)(static_cast<city_type>(i), b);
+			});
+
+		std::copy_n(candidates.begin(), k,
+		            neighbors_.begin() +
+		            static_cast<std::ptrdiff_t>(i * k));
+	}
 }
 
 template <DistanceSource Dist, typename TourCost>

@@ -1,5 +1,10 @@
 #pragma once
 
+// Held-Karp algorithm (exact, dynamic programming)
+//
+// Bellman (1962), "Dynamic Programming Treatment of the Travelling Salesman Problem"
+// Held, Karp (1962), "A Dynamic Programming Approach to Sequencing Problems"
+
 #include <periple/core/solver.hpp>
 
 #include <bit>
