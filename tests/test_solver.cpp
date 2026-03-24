@@ -59,4 +59,32 @@ int main() {
 	assert(solver.tour()[0] == 2);
 	solver.nearest_neighbor({.start_city = 0});
 	assert(solver.tour()[0] == 0);
+
+	// --- symmetric ---
+	assert(!solver.symmetric());
+
+	// set_symmetric(true) on a symmetric matrix succeeds.
+	solver.set_matrix(mat);
+	solver.set_symmetric(true);
+	assert(solver.symmetric());
+
+	// set_symmetric(false) clears the flag.
+	solver.set_symmetric(false);
+	assert(!solver.symmetric());
+
+	// set_matrix preserves symmetric flag; re-checks in debug.
+	solver.set_symmetric(true);
+	solver.set_matrix(mat2);  // mat2 is also symmetric
+	assert(solver.symmetric());
+
+	// unchecked bypasses the debug check.
+	periple::DistanceMatrix<int> asym(3, {0, 1, 2, 3, 0, 4, 5, 6, 0});
+	solver.set_symmetric(false);
+	solver.set_matrix(asym);
+	solver.set_symmetric(true, periple::unchecked);
+	assert(solver.symmetric());
+
+	// reset clears symmetric flag.
+	solver.reset();
+	assert(!solver.symmetric());
 }

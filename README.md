@@ -253,6 +253,8 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 | `Solver()` | Create an empty solver (requires explicit template parameter) |
 | `set_matrix(dist)` | Bind (or rebind) to a distance source, clearing any solution |
 | `set_tour_cost(tc)` | Set or change the tour cost function |
+| `set_symmetric(bool)` | Declare whether the problem is symmetric (default: `false`). Checked in debug |
+| `set_symmetric(bool, unchecked)` | Same, but skips the debug symmetry check on the distance matrix |
 | `clear()` | Clear the current solution, keep the distance source |
 | `reset()` | Reset to default-constructed state |
 
@@ -264,6 +266,7 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 | `tour()` | `span<const city_type>` | Zero-copy view of the current tour |
 | `cost()` | `cost_type` | Cost of the current tour |
 | `size()` | `std::size_t` | Number of cities |
+| `symmetric()` | `bool` | Whether the problem is declared symmetric |
 | `set_tour(span)` | `void` | Inject a tour (full or partial prefix) |
 
 ### Algorithms

@@ -2,6 +2,7 @@
 
 #include <periple/core/traits.hpp>
 #include <periple/core/callbacks.hpp>
+#include <periple/core/log.hpp>
 #include <periple/core/caches/hk_cache.hpp>
 
 #include <algorithm>
@@ -30,6 +31,10 @@ struct HeldKarpParams {};
 
 enum class SolutionStatus { none, partial, feasible, optimal };
 
+// Tag type to skip debug symmetry checks in set_symmetric().
+struct unchecked_t {};
+inline constexpr unchecked_t unchecked{};
+
 // ---------------------------------------------------------------------------
 // Solver
 // ---------------------------------------------------------------------------
@@ -52,11 +57,14 @@ public:
 
 	// --- State reading ------------------------------------------------------
 
-	auto status() const -> SolutionStatus;
-	auto size()   const -> std::size_t;
-	auto tour()   const -> std::span<const city_type>;
-	auto cost()   const -> cost_type;
+	auto status()    const -> SolutionStatus;
+	auto size()      const -> std::size_t;
+	auto tour()      const -> std::span<const city_type>;
+	auto cost()      const -> cost_type;
+	bool symmetric() const;
 	void set_tour(std::span<const city_type> tour);
+	void set_symmetric(bool sym);
+	void set_symmetric(bool sym, unchecked_t);
 
 	// --- Neighbor lists -----------------------------------------------------
 
@@ -85,6 +93,7 @@ private:
 	void ensure_neighbors(std::size_t k);
 	void rebuild_position();
 	void invalidate_caches();
+	void check_symmetry() const;
 	auto compute_tour_cost(std::span<const city_type> t) const -> cost_type;
 
 	// State
@@ -92,6 +101,7 @@ private:
 	const TourCost* tour_cost_ = nullptr;
 	SolutionStatus status_     = SolutionStatus::none;
 	std::size_t    n_          = 0;
+	bool           symmetric_  = false;
 	std::vector<city_type> tour_;
 	cost_type      cost_       = {};
 
@@ -129,6 +139,7 @@ void Solver<Dist, TourCost>::set_matrix(const Dist& dist) {
 	n_      = 0;
 	cost_   = {};
 	invalidate_caches();
+	if (symmetric_) check_symmetry();
 }
 
 template <DistanceSource Dist, typename TourCost>
@@ -168,6 +179,22 @@ auto Solver<Dist, TourCost>::tour() const -> std::span<const city_type> {
 template <DistanceSource Dist, typename TourCost>
 auto Solver<Dist, TourCost>::cost() const -> cost_type {
 	return cost_;
+}
+
+template <DistanceSource Dist, typename TourCost>
+bool Solver<Dist, TourCost>::symmetric() const {
+	return symmetric_;
+}
+
+template <DistanceSource Dist, typename TourCost>
+void Solver<Dist, TourCost>::set_symmetric(bool sym) {
+	symmetric_ = sym;
+	if (sym && dist_) check_symmetry();
+}
+
+template <DistanceSource Dist, typename TourCost>
+void Solver<Dist, TourCost>::set_symmetric(bool sym, unchecked_t) {
+	symmetric_ = sym;
 }
 
 template <DistanceSource Dist, typename TourCost>
@@ -233,6 +260,38 @@ template <DistanceSource Dist, typename TourCost>
 void Solver<Dist, TourCost>::invalidate_caches() {
 	if (hk_cache_) hk_cache_->reset();
 	neighbors_k_ = 0;
+}
+
+template <DistanceSource Dist, typename TourCost>
+void Solver<Dist, TourCost>::check_symmetry() const {
+	assert([&] {
+		const auto n = dist_->size();
+		constexpr std::size_t max_print = 5;
+		std::size_t count = 0;
+		for (std::size_t i = 0; i < n; ++i)
+			for (std::size_t j = i + 1; j < n; ++j) {
+				auto dij = (*dist_)(static_cast<city_type>(i),
+				                    static_cast<city_type>(j));
+				auto dji = (*dist_)(static_cast<city_type>(j),
+				                    static_cast<city_type>(i));
+				if (dij != dji) {
+					if (count == 0)
+						detail::log(
+							"set_symmetric(true) but distance"
+							" matrix has violations:\n");
+					if (count < max_print)
+						detail::log(
+							"  d(%zu, %zu) = %g,"
+							" d(%zu, %zu) = %g\n",
+							i, j, static_cast<double>(dij),
+							j, i, static_cast<double>(dji));
+					++count;
+				}
+			}
+		if (count > max_print)
+			detail::log("  ... and %zu more\n", count - max_print);
+		return count == 0;
+	}());
 }
 
 template <DistanceSource Dist, typename TourCost>

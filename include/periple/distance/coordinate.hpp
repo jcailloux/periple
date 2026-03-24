@@ -31,7 +31,6 @@ class CoordinateDistance {
 public:
 	using cost_type = CostT;
 	using city_type = CityT;
-	static constexpr bool is_symmetric = true;
 
 	// Flat coordinates: [x0,y0,z0, x1,y1,z1, ...], n deduced from size/dim.
 	CoordinateDistance(

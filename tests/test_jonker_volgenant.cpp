@@ -27,7 +27,6 @@ void test_concept_and_traits() {
 	auto jv = periple::jonker_volgenant(m);
 
 	static_assert(periple::DistanceSource<decltype(jv)>);
-	static_assert(periple::dist_traits<decltype(jv)>::is_symmetric);
 }
 
 void test_distance_values() {

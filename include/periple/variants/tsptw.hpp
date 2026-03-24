@@ -54,11 +54,11 @@ public:
 private:
 	void sort_windows() {
 		for (std::size_t i = 0; i + 1 < offsets_.size(); ++i) {
-			std::sort(windows_.begin() + static_cast<std::ptrdiff_t>(offsets_[i]),
-			          windows_.begin() + static_cast<std::ptrdiff_t>(offsets_[i + 1]),
-				[](const TimeWindow& a, const TimeWindow& b) {
-					return a.earliest < b.earliest;
-				});
+			auto begin = windows_.begin() + static_cast<std::ptrdiff_t>(offsets_[i]);
+			auto end   = windows_.begin() + static_cast<std::ptrdiff_t>(offsets_[i + 1]);
+			std::sort(begin, end, [](const TimeWindow& a, const TimeWindow& b) {
+				return a.earliest < b.earliest;
+			});
 		}
 	}
 
@@ -119,25 +119,24 @@ struct Strict {
 
 	// Single window per city.
 	Strict(const Dist& dist, std::span<const TimeWindow> windows)
-		: dist_(&dist), store_(windows)
-		, arrival_times_(dist.size(), cost_type{}) {}
+		: dist_(&dist)
+		, store_(windows)
+		, arrival_times_(dist.size(), cost_type{})
+	{}
 
 	// Multiple windows per city.
 	Strict(const Dist& dist, std::span<const std::vector<TimeWindow>> windows)
-		: dist_(&dist), store_(windows)
-		, arrival_times_(dist.size(), cost_type{}) {}
+		: dist_(&dist)
+		, store_(windows)
+		, arrival_times_(dist.size(), cost_type{})
+	{}
 
 	bool move_filter(std::span<const city_type> tour,
 	                 const AppendMove<city_type>& m) const
 	{
 		assert(!tour.empty());
-		auto last = tour.back();
-		auto last_arrival = static_cast<double>(arrival_times_[tour.size() - 1]);
-		auto depart = detail::departure_time(
-			store_[static_cast<std::size_t>(last)], last_arrival);
-		auto arrival = depart + static_cast<double>((*dist_)(last, m.city));
-		return detail::is_feasible(
-			store_[static_cast<std::size_t>(m.city)], arrival);
+		auto arrival = next_arrival(tour, tour.size() - 1, m.city);
+		return detail::is_feasible(windows_of(m.city), arrival);
 	}
 
 	void on_commit(std::span<const city_type> tour,
@@ -145,22 +144,31 @@ struct Strict {
 	{
 		auto pos = tour.size() - 1;
 		if (pos == 0) {
-			// Start city: arrival at time 0.
 			arrival_times_[0] = cost_type{};
 		} else {
-			auto prev = tour[pos - 1];
-			auto prev_arrival = static_cast<double>(arrival_times_[pos - 1]);
-			auto depart = detail::departure_time(
-				store_[static_cast<std::size_t>(prev)], prev_arrival);
 			arrival_times_[pos] = static_cast<cost_type>(
-				depart + static_cast<double>((*dist_)(prev, m.city)));
+				next_arrival(tour, pos - 1, m.city));
 		}
 	}
 
 private:
+	std::span<const TimeWindow> windows_of(city_type city) const {
+		return store_[static_cast<std::size_t>(city)];
+	}
+
+	double next_arrival(std::span<const city_type> tour,
+	                    std::size_t from_pos, city_type to) const
+	{
+		auto from = tour[from_pos];
+		auto depart = detail::departure_time(
+			windows_of(from),
+			static_cast<double>(arrival_times_[from_pos]));
+		return depart + static_cast<double>((*dist_)(from, to));
+	}
+
 	const Dist* dist_;
 	WindowStore store_;
-	mutable std::vector<cost_type> arrival_times_;  // arrival_times_[k] = arrival time at tour position k
+	mutable std::vector<cost_type> arrival_times_;
 };
 
 // ---------------------------------------------------------------------------
@@ -175,12 +183,16 @@ struct Relaxed {
 	// Single window per city.  dist is used only for template deduction.
 	Relaxed(const Dist&, std::span<const TimeWindow> windows,
 	        cost_type penalty_weight = 1000)
-		: store_(windows), penalty_weight_(penalty_weight) {}
+		: store_(windows)
+		, penalty_weight_(penalty_weight)
+	{}
 
 	// Multiple windows per city.  dist is used only for template deduction.
 	Relaxed(const Dist&, std::span<const std::vector<TimeWindow>> windows,
 	        cost_type penalty_weight = 1000)
-		: store_(windows), penalty_weight_(penalty_weight) {}
+		: store_(windows)
+		, penalty_weight_(penalty_weight)
+	{}
 
 	// tour_cost callable: distance + penalty for late arrivals.
 	auto operator()(const Dist& dist,
@@ -189,18 +201,16 @@ struct Relaxed {
 		cost_type distance_cost{};
 		cost_type penalty_cost{};
 		double time = 0.0;
-		const auto n = tour.size();
 
-		for (std::size_t i = 0; i < n; ++i) {
-			auto ci = static_cast<std::size_t>(tour[i]);
-			auto violation = detail::violation_amount(store_[ci], time);
+		for (std::size_t i = 0; i < tour.size(); ++i) {
+			auto ws = windows_of(tour[i]);
+			auto violation = detail::violation_amount(ws, time);
 			if (violation > 0.0)
 				penalty_cost += static_cast<cost_type>(
 					static_cast<double>(penalty_weight_) * violation);
-			time = detail::departure_time(store_[ci], time);
+			time = detail::departure_time(ws, time);
 
-			auto next = tour[(i + 1) % n];
-			auto travel = dist(tour[i], next);
+			auto travel = dist(tour[i], tour[(i + 1) % tour.size()]);
 			distance_cost += travel;
 			time += static_cast<double>(travel);
 		}
@@ -209,6 +219,10 @@ struct Relaxed {
 	}
 
 private:
+	std::span<const TimeWindow> windows_of(city_type city) const {
+		return store_[static_cast<std::size_t>(city)];
+	}
+
 	WindowStore store_;
 	cost_type penalty_weight_;
 };

@@ -28,7 +28,6 @@ class JonkerVolgenantView {
 public:
 	using cost_type = typename dist_traits<Dist>::cost_type;
 	using city_type = typename dist_traits<Dist>::city_type;
-	static constexpr bool is_symmetric = true;
 
 	JonkerVolgenantView(const Dist& dist, cost_type big_m)
 		: dist_(&dist), n_(dist.size()), big_m_(big_m) {

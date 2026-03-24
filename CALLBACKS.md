@@ -152,6 +152,28 @@ solver.nearest_neighbor();                  // completes from the prefix
 
 When continuing from a partial tour, `on_commit` is only called for newly placed cities. If your callbacks maintain state (like arrival times), ensure they are consistent with the existing prefix before calling the algorithm.
 
+## Callbacks and symmetry
+
+Symmetry is a property of the **full problem** (distance matrix + callbacks), not of the distance matrix alone. Callbacks can break or restore symmetry:
+
+- `move_eval` or `move_score` that make a move's cost depend on anything beyond the pairwise distance (direction, visit order, learning penalties, ...) can break symmetry, even with a symmetric distance matrix.
+- Conversely, callbacks can symmetrize an asymmetric distance matrix.
+
+Use `set_symmetric` to declare the effective symmetry of your problem. In debug builds, `set_symmetric(true)` asserts that the distance matrix is symmetric. If your callbacks restore symmetry on an asymmetric matrix, use `set_symmetric(true, periple::unchecked)` to skip this check.
+
+```cpp
+// Symmetric matrix, no callbacks that break symmetry
+solver.set_symmetric(true);
+
+// Symmetric matrix, but TSPTW callbacks make the problem asymmetric
+solver.set_symmetric(false);
+
+// Asymmetric matrix, but callbacks symmetrize the problem
+solver.set_symmetric(true, periple::unchecked);
+```
+
+Algorithms use `symmetric()` to decide whether to apply symmetry-based optimizations. Getting this wrong does not affect correctness of the distance computation, but may lead algorithms to make incorrect assumptions about move equivalence (e.g., segment reversal in 2-opt).
+
 ## Variants
 
 Pre-built callback structs for common TSP variants (TSPTW, etc.) are documented in [VARIANTS.md](VARIANTS.md).

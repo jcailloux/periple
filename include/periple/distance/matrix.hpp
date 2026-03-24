@@ -69,7 +69,6 @@ class SymmetricDistanceMatrix {
 public:
 	using cost_type = CostT;
 	using city_type = CityT;
-	static constexpr bool is_symmetric = true;
 
 	SymmetricDistanceMatrix() = default;
 
