@@ -28,11 +28,6 @@ auto held_karp_solve(
 	using city_type = typename dist_traits<Dist>::city_type;
 	using move_type = DPMove<city_type, cost_type>;
 
-	if (n <= 1) {
-		if (n == 1) tour[0] = city_type{0};
-		return cost_type{};
-	}
-
 	constexpr auto INF = std::numeric_limits<cost_type>::max();
 	const std::size_t num_sets = std::size_t{1} << n;
 
@@ -123,8 +118,13 @@ template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
 	-> Solver&
 {
+	if (try_trivial()) {
+		status_ = SolutionStatus::optimal;
+		return *this;
+	}
+
 	n_ = dist_->size();
-	ensure_shared(n_);
+	ensure_capacity(n_);
 
 	if (!hk_cache_) hk_cache_.emplace();
 

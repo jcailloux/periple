@@ -84,6 +84,15 @@ public:
 	// Computed lazily on first call; grows if k exceeds previous requests.
 	[[nodiscard]] auto neighbors(city_type city, std::size_t k) -> std::span<const city_type>;
 
+	// --- Construction primitives --------------------------------------------
+
+	auto append(city_type city) -> Solver&;
+	[[nodiscard]] auto can_append(city_type city) const -> bool;
+
+	// --- Tour import with known cost ----------------------------------------
+
+	void set_tour(std::span<const city_type> tour, cost_type known_cost);
+
 	// --- Algorithms (defined inline in algorithms/*.hpp) --------------------
 
 	auto nearest_neighbor(NearestNeighborParams params = {}) -> Solver&;
@@ -99,7 +108,8 @@ public:
 #endif
 
 private:
-	void ensure_shared(std::size_t n);
+	auto try_trivial() -> bool;
+	void ensure_capacity(std::size_t n);
 	void ensure_neighbors(std::size_t k);
 	void rebuild_position();
 	void invalidate_caches();
@@ -235,7 +245,7 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 		return true;
 	}());
 
-	ensure_shared(total);
+	ensure_capacity(total);
 	n_ = t.size();
 	std::copy(t.begin(), t.end(), tour_.begin());
 
@@ -260,7 +270,7 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 // --- Internal helpers -------------------------------------------------------
 
 template <DistanceSource Dist, typename Variant>
-void Solver<Dist, Variant>::ensure_shared(std::size_t n) {
+void Solver<Dist, Variant>::ensure_capacity(std::size_t n) {
 	if (tour_.size()     < n) tour_.resize(n);
 	if (position_.size() < n) position_.resize(n);
 	if (visited_.size()  < n) visited_.resize(n);
@@ -370,6 +380,132 @@ auto Solver<Dist, Variant>::compute_tour_cost(std::span<const city_type> t)
 			total += (*dist_)(t[i], t[(i + 1) % t.size()]);
 		return total;
 	}
+}
+
+// --- Construction primitives ------------------------------------------------
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
+	assert(dist_ && "append: no distance source set");
+	assert((status_ == SolutionStatus::none || status_ == SolutionStatus::partial)
+		&& "append: solver must be in none or partial state");
+	const auto total = dist_->size();
+	assert(static_cast<std::size_t>(city) < total && "append: city index out of bounds");
+	ensure_capacity(total);
+
+	if (n_ == 0)
+		std::fill_n(visited_.data(), total, uint8_t{0});
+
+	// Accumulate edge cost via inline dispatch.
+	if (n_ > 0) {
+		auto t = std::span<const city_type>(tour_.data(), n_);
+		auto raw = (*dist_)(tour_[n_ - 1], city);
+		if constexpr (requires {
+			{ variant_ref().move_eval(t, AppendMove<city_type>{city}) }
+				-> std::convertible_to<cost_type>;
+		}) {
+			cost_ += static_cast<cost_type>(
+				variant_ref().move_eval(t, AppendMove<city_type>{city}));
+		} else {
+			cost_ += raw;
+		}
+	}
+
+	// Place and mark visited.
+	tour_[n_] = city;
+	visited_[static_cast<std::size_t>(city)] = 1;
+	++n_;
+
+	// Notify variant via inline dispatch.
+	if constexpr (requires {
+		variant_ref().on_move(
+			std::span<const city_type>(tour_.data(), n_),
+			AppendMove<city_type>{city});
+	}) {
+		variant_ref().on_move(
+			std::span<const city_type>(tour_.data(), n_),
+			AppendMove<city_type>{city});
+	}
+
+	// Auto-finalize if tour is complete.
+	if (n_ == total) {
+		cost_ = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
+		status_ = SolutionStatus::feasible;
+		rebuild_position();
+	} else {
+		status_ = SolutionStatus::partial;
+	}
+
+	return *this;
+}
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::can_append(city_type city) const -> bool {
+	auto t = std::span<const city_type>(tour_.data(), n_);
+	if constexpr (requires {
+		{ variant_ref().move_filter(t, AppendMove<city_type>{city}) }
+			-> std::convertible_to<bool>;
+	}) {
+		return variant_ref().move_filter(t, AppendMove<city_type>{city});
+	} else {
+		return true;
+	}
+}
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::try_trivial() -> bool {
+	assert(dist_ && "try_trivial: no distance source set");
+	const auto total = dist_->size();
+	if (total == 0) {
+		clear();
+		status_ = SolutionStatus::feasible;
+		return true;
+	}
+	if (total == 1) {
+		clear();
+		append(static_cast<city_type>(0));
+		return true;
+	}
+	return false;
+}
+
+// --- Tour import with known cost --------------------------------------------
+
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::set_tour(std::span<const city_type> t,
+                                     cost_type known_cost)
+{
+	assert(dist_ && "set_tour: no distance source set");
+	const auto total = dist_->size();
+	assert(t.size() <= total && "set_tour: tour exceeds matrix size");
+
+	// Debug validation: no duplicates, cities within bounds.
+	assert([&] {
+		for (std::size_t i = 0; i < t.size(); ++i) {
+			if (static_cast<std::size_t>(t[i]) >= total) return false;
+			for (std::size_t j = i + 1; j < t.size(); ++j)
+				if (t[i] == t[j]) return false;
+		}
+		return true;
+	}() && "set_tour: invalid tour (duplicate or out-of-bounds city)");
+
+	ensure_capacity(total);
+	n_ = t.size();
+	std::copy(t.begin(), t.end(), tour_.begin());
+	cost_ = known_cost;
+
+	if (n_ == total) {
+		status_ = SolutionStatus::feasible;
+	} else if (n_ > 0) {
+		status_ = SolutionStatus::partial;
+		std::fill_n(visited_.data(), total, uint8_t{0});
+		for (std::size_t i = 0; i < n_; ++i)
+			visited_[static_cast<std::size_t>(t[i])] = 1;
+	} else {
+		status_ = SolutionStatus::none;
+	}
+
+	rebuild_position();
 }
 
 // --- CTAD guides ------------------------------------------------------------

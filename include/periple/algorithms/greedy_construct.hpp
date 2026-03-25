@@ -9,7 +9,6 @@
 // Variant callbacks are forwarded to the strategy's methods when they
 // accept a callbacks parameter (4-arg). Otherwise the 3-arg form is called.
 
-#include <periple/core/apply.hpp>
 #include <periple/core/solver.hpp>
 
 #include <optional>
@@ -36,39 +35,6 @@ auto call_select_next(
 	}
 }
 
-template <typename CostT>
-struct BuildResult {
-	std::size_t placed;
-	CostT path_cost;
-};
-
-template <DistanceSource Dist, typename Strategy, typename Variant>
-auto greedy_append_build(
-	const Dist& dist, std::size_t n, std::size_t start_step,
-	typename dist_traits<Dist>::cost_type initial_cost,
-	std::span<typename dist_traits<Dist>::city_type> tour,
-	std::span<uint8_t> visited,
-	Strategy& strategy, const Variant& variant)
-	-> BuildResult<typename dist_traits<Dist>::cost_type>
-{
-	using city_type = typename dist_traits<Dist>::city_type;
-	using cost_type = typename dist_traits<Dist>::cost_type;
-
-	cost_type path_cost = initial_cost;
-
-	for (std::size_t step = start_step; step < n; ++step) {
-		auto partial = std::span<const city_type>(tour.data(), step);
-		auto vis = std::span<const uint8_t>(visited.data(), n);
-		auto next = call_select_next(strategy, dist, partial, vis, variant);
-		if (!next)
-			return {step, path_cost};
-
-		path_cost = apply_append(dist, tour, step, visited, *next,
-		                         path_cost, variant);
-	}
-	return {n, path_cost};
-}
-
 } // namespace detail
 
 // ---------------------------------------------------------------------------
@@ -81,72 +47,42 @@ auto Solver<Dist, Variant>::greedy_construct(
 	Strategy strategy, ConstructParams params)
 	-> Solver&
 {
-	assert(dist_);
-	const auto n = dist_->size();
-	ensure_shared(n);
-
+	assert(dist_ && "greedy_construct: no distance source set");
+	const auto total = dist_->size();
 	const auto& variant = variant_ref();
-	std::size_t start_step;
-	cost_type initial_cost{};
 
 	if (params.resume_at > 0) {
-		// Truncation and resume: the truncation invariant is that
-		// a constructive variant's state at positions 0..k-1 remains
-		// valid after truncation to k cities.
-		assert(params.resume_at <= n_);
+		assert(params.resume_at <= n_
+			&& "greedy_construct: resume_at exceeds current tour length");
 		const auto k = params.resume_at;
-		std::fill_n(visited_.data(), n, uint8_t{0});
+		ensure_capacity(total);
+		std::fill_n(visited_.data(), total, uint8_t{0});
 		for (std::size_t i = 0; i < k; ++i)
 			visited_[static_cast<std::size_t>(tour_[i])] = 1;
 		n_ = k;
-
-		// Re-evaluate prefix cost using the detection chain:
-		// on_truncate (variant optimization) > compute_tour_cost (default).
 		auto prefix = std::span<const city_type>(tour_.data(), k);
 		if constexpr (requires {
-			{ variant.on_truncate(*dist_, prefix) }
-				-> std::convertible_to<cost_type>;
+			{ variant.on_truncate(*dist_, prefix) } -> std::convertible_to<cost_type>;
 		}) {
-			initial_cost = static_cast<cost_type>(
-				variant.on_truncate(*dist_, prefix));
+			cost_ = static_cast<cost_type>(variant.on_truncate(*dist_, prefix));
 		} else {
-			initial_cost = compute_tour_cost(prefix);
+			cost_ = compute_tour_cost(prefix);
 		}
-
-		start_step = k;
-	} else {
-		if (n == 0) {
-			n_ = 0;
-			cost_ = {};
-			status_ = SolutionStatus::feasible;
-			return *this;
-		}
-		std::fill_n(visited_.data(), n, uint8_t{0});
-		auto start = static_cast<city_type>(params.start_city);
-		initial_cost = detail::apply_append(
-			*dist_,
-			std::span<city_type>(tour_.data(), n),
-			std::size_t{0},
-			std::span<uint8_t>(visited_.data(), n),
-			start, cost_type{}, variant);
-		start_step = 1;
-	}
-
-	auto result = detail::greedy_append_build(
-		*dist_, n, start_step, initial_cost,
-		std::span<city_type>(tour_.data(), n),
-		std::span<uint8_t>(visited_.data(), n),
-		strategy, variant);
-
-	n_ = result.placed;
-	if (result.placed == n) {
-		cost_ = compute_tour_cost(std::span<const city_type>(tour_.data(), n));
-		status_ = SolutionStatus::feasible;
-		rebuild_position();
-	} else {
-		cost_ = result.path_cost;
 		status_ = SolutionStatus::partial;
+	} else {
+		if (try_trivial()) return *this;
+		clear();
+		append(static_cast<city_type>(params.start_city));
 	}
+
+	while (n_ < total) {
+		auto partial = std::span<const city_type>(tour_.data(), n_);
+		auto vis = std::span<const uint8_t>(visited_.data(), total);
+		auto next = detail::call_select_next(strategy, *dist_, partial, vis, variant);
+		if (!next) break;
+		append(*next);
+	}
+
 	return *this;
 }
 
