@@ -37,11 +37,6 @@ void test_regression_nn_default() {
 	assert(solver.tour()[0] == 0);
 	// NN from 0: 0->1(10)->3(25)->2(30), cost=10+25+30+15=80
 	assert(solver.cost() == 80);
-
-	// Explicit NoCallbacks should give the same result.
-	solver.clear();
-	solver.nearest_neighbor(NoCallbacks{});
-	assert(solver.cost() == 80);
 }
 
 void test_regression_hk_default() {
@@ -59,40 +54,40 @@ void test_regression_hk_default() {
 void test_protocol_nn_logging() {
 	auto mat = make_mat4();
 	LoggingCallbacks cb;
-	Solver solver(mat);
-	solver.nearest_neighbor(cb);
+	Solver solver(mat, cb);
+	solver.nearest_neighbor();
 
-	// n=4 cities.  Fresh build: on_commit for start city, then 3 steps.
-	// Step 1: move_filter x3 candidates, on_commit x1
-	// Step 2: move_filter x2 candidates, on_commit x1
-	// Step 3: move_filter x1 candidate, on_commit x1
-	// Total: move_filter = 3+2+1 = 6, on_commit = 1(start) + 3 = 4
+	// n=4 cities.  Fresh build: on_move for start city, then 3 steps.
+	// Step 1: move_filter x3 candidates, on_move x1
+	// Step 2: move_filter x2 candidates, on_move x1
+	// Step 3: move_filter x1 candidate, on_move x1
+	// Total: move_filter = 3+2+1 = 6, on_move = 1(start) + 3 = 4
 	std::size_t filter_count = 0, commit_count = 0;
 	for (const auto& entry : cb.log) {
 		if (entry == "move_filter") ++filter_count;
-		else if (entry == "on_commit") ++commit_count;
+		else if (entry == "on_move") ++commit_count;
 	}
 	assert(filter_count == 6);
 	assert(commit_count == 4);
 
-	// Verify ordering: on_commit first (start city), then blocks of
-	// (move_filter..., on_commit).
-	assert(cb.log[0] == "on_commit");  // start city
+	// Verify ordering: on_move first (start city), then blocks of
+	// (move_filter..., on_move).
+	assert(cb.log[0] == "on_move");  // start city
 	assert(cb.log[1] == "move_filter");
 }
 
 void test_protocol_nn_n1() {
-	// Single city: only on_commit for start, no filtering.
+	// Single city: only on_move for start, no filtering.
 	SymmetricDistanceMatrix<int> mat(1);
 	LoggingCallbacks cb;
-	Solver solver(mat);
-	solver.nearest_neighbor(cb);
+	Solver solver(mat, cb);
+	solver.nearest_neighbor();
 
 	assert(solver.tour().size() == 1);
 	std::size_t filter_count = 0, commit_count = 0;
 	for (const auto& e : cb.log) {
 		if (e == "move_filter") ++filter_count;
-		else if (e == "on_commit") ++commit_count;
+		else if (e == "on_move") ++commit_count;
 	}
 	assert(filter_count == 0);
 	assert(commit_count == 1);
@@ -112,8 +107,8 @@ struct RejectCity1 {
 void test_move_filter_reject() {
 	auto mat = make_mat4();
 	RejectCity1 cb;
-	Solver solver(mat);
-	solver.nearest_neighbor(cb, {.start_city = 0});
+	Solver solver(mat, cb);
+	solver.nearest_neighbor({.start_city = 0});
 
 	// City 1 is always rejected by the filter.
 	// Steps: 0->2(15)->3(30)->nullopt. Partial tour.
@@ -130,8 +125,8 @@ void test_move_filter_reject() {
 
 struct DoubleCost {
 	template <DistanceSource D>
-	auto operator()(const D& dist,
-	                std::span<const typename dist_traits<D>::city_type> tour) const
+	auto tour_cost(const D& dist,
+	               std::span<const typename dist_traits<D>::city_type> tour) const
 		-> typename dist_traits<D>::cost_type
 	{
 		typename dist_traits<D>::cost_type total{};
@@ -246,8 +241,8 @@ void test_partial_tour_completion() {
 	assert(solver.tour().size() == 2);
 	assert(solver.cost() == 15); // dist(0,2) = 15, open path
 
-	// Complete with NN.
-	solver.nearest_neighbor();
+	// Complete with NN from the partial tour.
+	solver.nearest_neighbor({.resume_at = solver.tour().size()});
 	assert(solver.status() == SolutionStatus::feasible);
 	assert(solver.tour().size() == 4);
 	assert(solver.tour()[0] == 0);
@@ -303,46 +298,18 @@ void test_move_eval_changes_selection() {
 	// With move_eval: city 1 gets score 9999, others get 0.
 	// NN picks any city with score 0 instead of city 1.
 	DistancePlusBias cb;
-	Solver solver(mat);
-	solver.nearest_neighbor(cb);
+	Solver solver(mat, cb);
+	solver.nearest_neighbor();
 	assert(solver.tour()[1] != 1);
 }
 
 // ---------------------------------------------------------------------------
-// Unit: move_score overrides move_eval
+// Unit: move_eval return type deduction (double on int matrix)
 // ---------------------------------------------------------------------------
 
-struct EvalAndScore {
-	// move_eval says city 2 is bad.
+struct FractionalEval {
 	double move_eval(std::span<const std::size_t>,
 	                 const AppendMove<std::size_t>& m) const {
-		return m.city == 2 ? 9999.0 : 0.0;
-	}
-	// move_score says city 2 is good (overrides move_eval for decisions).
-	double move_score(std::span<const std::size_t>,
-	                  const AppendMove<std::size_t>& m) const {
-		return m.city == 2 ? -1.0 : 100.0;
-	}
-};
-
-void test_move_score_overrides_eval() {
-	auto mat = make_mat4();
-
-	EvalAndScore cb;
-	Solver solver(mat);
-	solver.nearest_neighbor(cb);
-
-	// move_score gives city 2 the best score (-1), so it should be picked first.
-	assert(solver.tour()[1] == 2);
-}
-
-// ---------------------------------------------------------------------------
-// Unit: score type deduction (double move_score on int matrix)
-// ---------------------------------------------------------------------------
-
-struct FractionalScore {
-	double move_score(std::span<const std::size_t>,
-	                  const AppendMove<std::size_t>& m) const {
 		// Fractional scores that would be truncated to 0 if cast to int.
 		if (m.city == 1) return 0.3;
 		if (m.city == 2) return 0.1;  // best
@@ -350,13 +317,13 @@ struct FractionalScore {
 	}
 };
 
-void test_score_type_deduction() {
+void test_move_eval_type_deduction() {
 	auto mat = make_mat4();
-	FractionalScore cb;
-	Solver solver(mat);
-	solver.nearest_neighbor(cb);
+	FractionalEval cb;
+	Solver solver(mat, cb);
+	solver.nearest_neighbor();
 
-	// City 2 has the lowest score (0.1).  If scores were truncated to int,
+	// City 2 has the lowest eval (0.1).  If evals were truncated to int,
 	// cities 1 and 2 would both be 0 and the result would depend on iteration
 	// order.  With correct double deduction, city 2 wins deterministically.
 	assert(solver.tour()[1] == 2);
@@ -371,32 +338,32 @@ void test_partial_tour_with_callbacks() {
 
 	std::vector<std::size_t> prefix = {0, 2};
 	LoggingCallbacks cb;
-	Solver solver(mat);
+	Solver solver(mat, cb);
 	solver.set_tour(prefix);
-	solver.nearest_neighbor(cb);
+	solver.nearest_neighbor({.resume_at = solver.tour().size()});
 
 	// Prefix preserved.
 	assert(solver.tour()[0] == 0);
 	assert(solver.tour()[1] == 2);
 	assert(solver.status() == SolutionStatus::feasible);
 
-	// on_commit called only for newly placed cities (not for prefix).
-	// 2 new cities placed -> 2 on_commit calls.
+	// on_move called only for newly placed cities (not for prefix).
+	// 2 new cities placed -> 2 on_move calls.
 	std::size_t commit_count = 0;
 	for (const auto& e : cb.log)
-		if (e == "on_commit") ++commit_count;
+		if (e == "on_move") ++commit_count;
 	assert(commit_count == 2);
 }
 
 // ---------------------------------------------------------------------------
-// Unit: set_tour_cost method
+// Unit: set_variant method
 // ---------------------------------------------------------------------------
 
-void test_set_tour_cost() {
+void test_set_variant() {
 	auto mat = make_mat4();
 	DoubleCost tc;
 
-	// Construct without tour_cost, then set it.
+	// Construct with variant from the start.
 	Solver solver(mat, tc);
 	solver.nearest_neighbor();
 	auto cost_with = solver.cost();
@@ -419,15 +386,15 @@ void test_asymmetric_with_callbacks() {
 	});
 
 	LoggingCallbacks cb;
-	Solver solver(mat);
-	solver.nearest_neighbor(cb);
+	Solver solver(mat, cb);
+	solver.nearest_neighbor();
 
 	assert(solver.tour().size() == 3);
 
 	// Callbacks were invoked.
 	std::size_t commit_count = 0;
 	for (const auto& e : cb.log)
-		if (e == "on_commit") ++commit_count;
+		if (e == "on_move") ++commit_count;
 	assert(commit_count == 3);
 }
 
@@ -448,8 +415,8 @@ void test_tsptw_strict_nn() {
 	};
 
 	tsptw::Strict tw(mat, windows);
-	Solver solver(mat);
-	solver.nearest_neighbor(tw);
+	Solver solver(mat, tw);
+	solver.nearest_neighbor();
 
 	// Without strict: NN from 0 -> 1(10) -> 3(25) -> 2(30).
 	// With strict: 0->1 rejected (arrival 10 > 1) at every step.
@@ -488,7 +455,7 @@ void test_tsptw_relaxed_nn() {
 		assert(solver.tour()[i] == ref.tour()[i]);
 
 	// Cost includes penalties.
-	auto expected = relaxed(mat, solver.tour());
+	auto expected = relaxed.tour_cost(mat, solver.tour());
 	assert(solver.cost() == expected);
 	assert(solver.cost() > ref.cost());
 }
@@ -509,7 +476,7 @@ void test_tsptw_relaxed_hk() {
 
 	// HK finds the distance-optimal tour.
 	// Reported cost includes penalties.
-	auto expected = relaxed(mat, solver.tour());
+	auto expected = relaxed.tour_cost(mat, solver.tour());
 	assert(solver.cost() == expected);
 
 	Solver ref(mat);
@@ -540,8 +507,8 @@ void test_tsptw_strict_multi_window() {
 	};
 
 	tsptw::Strict tw(mat, windows);
-	Solver solver(mat);
-	solver.nearest_neighbor(tw);
+	Solver solver(mat, tw);
+	solver.nearest_neighbor();
 
 	// NN from 0: candidates {1, 2}.
 	// 0->2: dist=3, arrival=3, window [0,100] OK. Nearest.
@@ -575,8 +542,8 @@ void test_tsptw_strict_multi_window_reject() {
 	};
 
 	tsptw::Strict tw(mat, windows);
-	Solver solver(mat);
-	solver.nearest_neighbor(tw);
+	Solver solver(mat, tw);
+	solver.nearest_neighbor();
 
 	// From 0: 0->1 arrival=10, both windows latest=2 and 6 < 10. Rejected.
 	// 0->2 arrival=3, OK. Pick 2.
@@ -655,10 +622,9 @@ int main() {
 		{"custom_tour_cost_nn",          test_custom_tour_cost_nn},
 		{"custom_tour_cost_hk",          test_custom_tour_cost_hk},
 		{"custom_tour_cost_set_tour",    test_custom_tour_cost_set_tour},
-		// Unit - move_eval / move_score
+		// Unit - move_eval
 		{"move_eval_changes_selection",  test_move_eval_changes_selection},
-		{"move_score_overrides_eval",    test_move_score_overrides_eval},
-		{"score_type_deduction",         test_score_type_deduction},
+		{"move_eval_type_deduction",     test_move_eval_type_deduction},
 		// Unit - selector
 		{"custom_selector",              test_custom_selector},
 		// Unit - partial tours
@@ -666,8 +632,8 @@ int main() {
 		{"partial_tour_with_callbacks",  test_partial_tour_with_callbacks},
 		{"set_tour_full",                test_set_tour_full},
 		{"set_tour_empty",               test_set_tour_empty},
-		// Unit - set_tour_cost
-		{"set_tour_cost",                test_set_tour_cost},
+		// Unit - set_variant
+		{"set_variant",                  test_set_variant},
 		// Unit - asymmetric
 		{"asymmetric_with_callbacks",    test_asymmetric_with_callbacks},
 		// Functional - TSPTW

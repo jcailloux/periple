@@ -147,8 +147,8 @@ struct Strict {
 		return detail::is_feasible(windows_of(m.city), arrival);
 	}
 
-	void on_commit(std::span<const city_type> tour,
-	               const AppendMove<city_type>& m) const
+	void on_move(std::span<const city_type> tour,
+	             const AppendMove<city_type>& m) const
 	{
 		auto pos = tour.size() - 1;
 		if (pos == 0) {
@@ -166,7 +166,7 @@ struct Strict {
 		return detail::is_feasible(windows_of(m.to), dp_arrival_at(m));
 	}
 
-	void on_improve(const DPMove<city_type, cost_type>& m) const {
+	void on_move(const DPMove<city_type, cost_type>& m) const {
 		ensure_dp_arrival();
 		std::size_t set_next = m.set |
 			(std::size_t{1} << static_cast<std::size_t>(m.to));
@@ -240,16 +240,18 @@ struct Relaxed {
 		assert(windows.size() == dist.size());
 	}
 
-	// --- tour_cost callable: distance + penalty for late arrivals ---
+	// --- tour_cost: distance + penalty for late arrivals ---
 
-	auto operator()(const Dist& dist,
-	                std::span<const city_type> tour) const -> cost_type
+	auto tour_cost(const Dist& dist,
+	               std::span<const city_type> tour) const -> cost_type
 	{
+		const bool closed = (tour.size() == dist.size());
+		const auto edges = closed ? tour.size() : tour.size() - 1;
 		cost_type distance_cost{};
 		cost_type penalty_cost{};
 		double time = 0.0;
 
-		for (std::size_t i = 0; i < tour.size(); ++i) {
+		for (std::size_t i = 0; i < edges; ++i) {
 			auto ws = windows_of(tour[i]);
 			auto violation = detail::violation_amount(ws, time);
 			if (violation > 0.0)
@@ -277,7 +279,7 @@ struct Relaxed {
 		return m.distance;
 	}
 
-	void on_improve(const DPMove<city_type, cost_type>& m) const {
+	void on_move(const DPMove<city_type, cost_type>& m) const {
 		ensure_dp_arrival();
 		std::size_t set_next = m.set |
 			(std::size_t{1} << static_cast<std::size_t>(m.to));

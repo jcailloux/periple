@@ -15,8 +15,8 @@ namespace periple {
 // Strategy for greedy_construct: selects the nearest unvisited city.
 //
 // Without variant callbacks (3-arg): scores by distance.
-// With variant callbacks (4-arg): uses move_filter, move_score > move_eval > dist,
-// and delegates on_commit via on_placed.
+// With variant callbacks (4-arg): uses move_filter, move_eval > dist,
+// and delegates on_move via on_placed.
 struct NearestSelector {
 
 	// --- Without variant callbacks ---
@@ -101,9 +101,9 @@ struct NearestSelector {
 	{
 		using city_type = typename dist_traits<Dist>::city_type;
 		if constexpr (requires {
-			variant.on_commit(tour, AppendMove<city_type>{tour.back()});
+			variant.on_move(tour, AppendMove<city_type>{tour.back()});
 		}) {
-			variant.on_commit(tour, AppendMove<city_type>{tour.back()});
+			variant.on_move(tour, AppendMove<city_type>{tour.back()});
 		}
 	}
 
@@ -115,13 +115,11 @@ private:
 	                  const Variant& variant)
 	{
 		using city_type = typename dist_traits<Dist>::city_type;
+		using cost_type = typename dist_traits<Dist>::cost_type;
 
 		if constexpr (requires {
-			variant.move_score(tour, AppendMove<city_type>{candidate});
-		}) {
-			return variant.move_score(tour, AppendMove<city_type>{candidate});
-		} else if constexpr (requires {
-			variant.move_eval(tour, AppendMove<city_type>{candidate});
+			{ variant.move_eval(tour, AppendMove<city_type>{candidate}) }
+				-> std::convertible_to<cost_type>;
 		}) {
 			return variant.move_eval(tour, AppendMove<city_type>{candidate});
 		} else {
@@ -134,24 +132,13 @@ private:
 // Solver::nearest_neighbor -- facade using NearestSelector
 // ---------------------------------------------------------------------------
 
-// With variant callbacks (primary implementation).
-template <DistanceSource Dist, typename TourCost>
-template <typename Variant>
-auto Solver<Dist, TourCost>::nearest_neighbor(
-	const Variant& variant, NearestNeighborParams params)
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::nearest_neighbor(NearestNeighborParams params)
 	-> Solver&
 {
-	return greedy_construct(NearestSelector{}, variant,
-	                        ConstructParams{.start_city = params.start_city});
-}
-
-// Without variant callbacks (forwards to primary).
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::nearest_neighbor(
-	NearestNeighborParams params)
-	-> Solver&
-{
-	return nearest_neighbor(NoCallbacks{}, params);
+	return greedy_construct(NearestSelector{},
+	                        ConstructParams{.start_city = params.start_city,
+	                                        .resume_at = params.resume_at});
 }
 
 } // namespace periple

@@ -19,7 +19,6 @@ namespace periple {
 // Tags
 // ---------------------------------------------------------------------------
 
-struct DefaultTourCost {};
 struct NoCallbacks {};
 
 // ---------------------------------------------------------------------------
@@ -28,19 +27,21 @@ struct NoCallbacks {};
 
 struct NearestNeighborParams {
 	std::size_t start_city = 0;
+	std::size_t resume_at = 0;
 };
 
 struct HeldKarpParams {};
 
 struct ConstructParams {
 	std::size_t start_city = 0;
+	std::size_t resume_at = 0;
 };
 
 // ---------------------------------------------------------------------------
 // SolutionStatus
 // ---------------------------------------------------------------------------
 
-enum class SolutionStatus { none, partial, feasible, optimal };
+enum class SolutionStatus { none, partial, feasible, optimal, infeasible };
 
 // Tag type to skip debug symmetry checks in set_symmetric().
 struct unchecked_t {};
@@ -50,7 +51,7 @@ inline constexpr unchecked_t unchecked{};
 // Solver
 // ---------------------------------------------------------------------------
 
-template <DistanceSource Dist, typename TourCost = DefaultTourCost>
+template <DistanceSource Dist, typename Variant = NoCallbacks>
 class Solver {
 public:
 	using cost_type = typename dist_traits<Dist>::cost_type;
@@ -60,9 +61,9 @@ public:
 
 	Solver() = default;
 	explicit Solver(const Dist& dist);
-	Solver(const Dist& dist, const TourCost& tc);
+	Solver(const Dist& dist, const Variant& v);
 	void set_matrix(const Dist& dist);
-	void set_tour_cost(const TourCost& tc);
+	void set_variant(const Variant& v);
 	void clear();  // Clears solution state but keeps the distance source and buffers.
 	void reset();  // Resets the solver to its default-constructed state.
 
@@ -87,25 +88,14 @@ public:
 
 	auto nearest_neighbor(NearestNeighborParams params = {}) -> Solver&;
 
-	template <typename Variant>
-	auto nearest_neighbor(const Variant& variant,
-	                      NearestNeighborParams params = {}) -> Solver&;
-
 	auto held_karp(HeldKarpParams params = {}) -> Solver&;
-
-	template <typename Variant>
-	auto held_karp(const Variant& variant, HeldKarpParams params = {}) -> Solver&;
 
 	template <typename Strategy>
 	auto greedy_construct(Strategy strategy,
 	                      ConstructParams params = {}) -> Solver&;
 
-	template <typename Strategy, typename Variant>
-	auto greedy_construct(Strategy strategy, const Variant& variant,
-	                      ConstructParams params = {}) -> Solver&;
-
 #ifdef PERIPLE_TESTING
-	template <DistanceSource D, typename TC> friend class SolverTestAccess;
+	template <DistanceSource D, typename V> friend class SolverTestAccess;
 #endif
 
 private:
@@ -116,9 +106,21 @@ private:
 	void check_symmetry() const;
 	auto compute_tour_cost(std::span<const city_type> t) const -> cost_type;
 
+	// Returns a reference to variant_ if non-null, otherwise a local NoCallbacks.
+	// For NoCallbacks Variant, all if constexpr checks compile to nothing.
+	auto variant_ref() const -> const Variant& {
+		if constexpr (std::is_same_v<Variant, NoCallbacks>) {
+			static constexpr NoCallbacks fallback{};
+			return fallback;
+		} else {
+			assert(variant_);
+			return *variant_;
+		}
+	}
+
 	// State
 	const Dist*    dist_       = nullptr;
-	const TourCost* tour_cost_ = nullptr;
+	const Variant* variant_    = nullptr;
 	SolutionStatus status_     = SolutionStatus::none;
 	std::size_t    n_          = 0;
 	bool           symmetric_  = false;
@@ -140,20 +142,20 @@ private:
 // Inline implementations -- lifecycle & state
 // ---------------------------------------------------------------------------
 
-template <DistanceSource Dist, typename TourCost>
-Solver<Dist, TourCost>::Solver(const Dist& dist) {
+template <DistanceSource Dist, typename Variant>
+Solver<Dist, Variant>::Solver(const Dist& dist) {
 	set_matrix(dist);
 }
 
-template <DistanceSource Dist, typename TourCost>
-Solver<Dist, TourCost>::Solver(const Dist& dist, const TourCost& tc)
-	: tour_cost_(&tc)
+template <DistanceSource Dist, typename Variant>
+Solver<Dist, Variant>::Solver(const Dist& dist, const Variant& v)
+	: variant_(&v)
 {
 	set_matrix(dist);
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::set_matrix(const Dist& dist) {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::set_matrix(const Dist& dist) {
 	dist_   = &dist;
 	status_ = SolutionStatus::none;
 	n_      = 0;
@@ -162,63 +164,63 @@ void Solver<Dist, TourCost>::set_matrix(const Dist& dist) {
 	if (symmetric_) check_symmetry();
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::set_tour_cost(const TourCost& tc) {
-	tour_cost_ = &tc;
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::set_variant(const Variant& v) {
+	variant_ = &v;
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::clear() {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::clear() {
 	status_ = SolutionStatus::none;
 	n_      = 0;
 	cost_   = {};
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::reset() {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::reset() {
 	*this = Solver();
 }
 
 // --- State reading ----------------------------------------------------------
 
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::status() const -> SolutionStatus {
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::status() const -> SolutionStatus {
 	return status_;
 }
 
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::size() const -> std::size_t {
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::size() const -> std::size_t {
 	return dist_ ? dist_->size() : 0;
 }
 
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::tour() const -> std::span<const city_type> {
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::tour() const -> std::span<const city_type> {
 	return {tour_.data(), n_};
 }
 
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::cost() const -> cost_type {
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::cost() const -> cost_type {
 	return cost_;
 }
 
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::symmetric() const -> bool {
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::symmetric() const -> bool {
 	return symmetric_;
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::set_symmetric(bool sym) {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::set_symmetric(bool sym) {
 	symmetric_ = sym;
 	if (sym && dist_) check_symmetry();
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::set_symmetric(bool sym, unchecked_t) {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::set_symmetric(bool sym, unchecked_t) {
 	symmetric_ = sym;
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::set_tour(std::span<const city_type> t) {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 	assert(dist_);
 	const auto total = dist_->size();
 	assert(t.size() <= total);
@@ -241,11 +243,7 @@ void Solver<Dist, TourCost>::set_tour(std::span<const city_type> t) {
 		cost_   = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
 		status_ = SolutionStatus::feasible;
 	} else if (n_ > 0) {
-		// Partial tour: open-path cost (no return edge).
-		cost_type path_cost{};
-		for (std::size_t i = 0; i + 1 < n_; ++i)
-			path_cost += (*dist_)(t[i], t[i + 1]);
-		cost_   = path_cost;
+		cost_   = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
 		status_ = SolutionStatus::partial;
 		// Mark visited cities for potential continuation.
 		std::fill_n(visited_.data(), total, uint8_t{0});
@@ -261,29 +259,29 @@ void Solver<Dist, TourCost>::set_tour(std::span<const city_type> t) {
 
 // --- Internal helpers -------------------------------------------------------
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::ensure_shared(std::size_t n) {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::ensure_shared(std::size_t n) {
 	if (tour_.size()     < n) tour_.resize(n);
 	if (position_.size() < n) position_.resize(n);
 	if (visited_.size()  < n) visited_.resize(n);
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::rebuild_position() {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::rebuild_position() {
 	if (position_.size() < n_) position_.resize(n_);
 	for (std::size_t i = 0; i < n_; ++i)
 		position_[static_cast<std::size_t>(tour_[i])] =
 			static_cast<city_type>(i);
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::invalidate_caches() {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::invalidate_caches() {
 	if (hk_cache_) hk_cache_->reset();
 	neighbors_k_ = 0;
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::check_symmetry() const {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::check_symmetry() const {
 	assert([&] {
 		const auto n = dist_->size();
 		constexpr std::size_t max_print = 5;
@@ -314,8 +312,8 @@ void Solver<Dist, TourCost>::check_symmetry() const {
 	}());
 }
 
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::neighbors(city_type city, std::size_t k)
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::neighbors(city_type city, std::size_t k)
 	-> std::span<const city_type>
 {
 	assert(dist_);
@@ -325,8 +323,8 @@ auto Solver<Dist, TourCost>::neighbors(city_type city, std::size_t k)
 		static_cast<std::size_t>(city) * neighbors_k_, k};
 }
 
-template <DistanceSource Dist, typename TourCost>
-void Solver<Dist, TourCost>::ensure_neighbors(std::size_t k) {
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::ensure_neighbors(std::size_t k) {
 	if (k <= neighbors_k_) return;
 
 	const auto n = dist_->size();
@@ -356,19 +354,21 @@ void Solver<Dist, TourCost>::ensure_neighbors(std::size_t k) {
 	}
 }
 
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::compute_tour_cost(std::span<const city_type> t)
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::compute_tour_cost(std::span<const city_type> t)
 	const -> cost_type
 {
-	if constexpr (std::is_same_v<TourCost, DefaultTourCost>) {
-		cost_type total{};
-		const auto n = t.size();
-		for (std::size_t i = 0; i < n; ++i)
-			total += (*dist_)(t[i], t[(i + 1) % n]);
-		return total;
+	if constexpr (requires(const Variant& v) {
+		{ v.tour_cost(*dist_, t) } -> std::convertible_to<cost_type>;
+	}) {
+		return static_cast<cost_type>(variant_ref().tour_cost(*dist_, t));
 	} else {
-		assert(tour_cost_);
-		return (*tour_cost_)(*dist_, t);
+		cost_type total{};
+		const bool closed = (t.size() == dist_->size());
+		const auto edges = closed ? t.size() : t.size() - 1;
+		for (std::size_t i = 0; i < edges; ++i)
+			total += (*dist_)(t[i], t[(i + 1) % t.size()]);
+		return total;
 	}
 }
 
@@ -377,7 +377,7 @@ auto Solver<Dist, TourCost>::compute_tour_cost(std::span<const city_type> t)
 template <DistanceSource Dist>
 Solver(const Dist&) -> Solver<Dist>;
 
-template <DistanceSource Dist, typename TourCost>
-Solver(const Dist&, const TourCost&) -> Solver<Dist, TourCost>;
+template <DistanceSource Dist, typename Variant>
+Solver(const Dist&, const Variant&) -> Solver<Dist, Variant>;
 
 } // namespace periple

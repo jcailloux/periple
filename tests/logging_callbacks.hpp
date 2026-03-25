@@ -19,8 +19,8 @@ struct LoggingCallbacks {
 	}
 
 	template <typename CityT>
-	void on_commit(std::span<const CityT>, const AppendMove<CityT>&) const {
-		log.push_back("on_commit");
+	void on_move(std::span<const CityT>, const AppendMove<CityT>&) const {
+		log.push_back("on_move");
 	}
 };
 

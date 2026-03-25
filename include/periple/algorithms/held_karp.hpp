@@ -81,8 +81,8 @@ auto held_karp_solve(
 					dp[idx(S_next, j)]     = new_cost;
 					parent[idx(S_next, j)] = ci;
 
-					if constexpr (requires { variant.on_improve(move); }) {
-						variant.on_improve(move);
+					if constexpr (requires { variant.on_move(move); }) {
+						variant.on_move(move);
 					}
 				}
 			}
@@ -125,12 +125,14 @@ auto held_karp_solve(
 	}
 
 	// Backtrack
-	tour[n - 1] = best_last;
-	std::size_t S = full;
-	for (std::size_t pos = n - 1; pos > 0; --pos) {
-		auto cur = static_cast<std::size_t>(tour[pos]);
-		tour[pos - 1] = parent[idx(S, cur)];
-		S ^= (std::size_t{1} << cur);
+	if (best_cost < INF) {
+		tour[n - 1] = best_last;
+		std::size_t S = full;
+		for (std::size_t pos = n - 1; pos > 0; --pos) {
+			auto cur = static_cast<std::size_t>(tour[pos]);
+			tour[pos - 1] = parent[idx(S, cur)];
+			S ^= (std::size_t{1} << cur);
+		}
 	}
 
 	return best_cost;
@@ -138,10 +140,8 @@ auto held_karp_solve(
 
 } // namespace detail
 
-// With variant callbacks (primary implementation).
-template <DistanceSource Dist, typename TourCost>
-template <typename Variant>
-auto Solver<Dist, TourCost>::held_karp(const Variant& variant, HeldKarpParams)
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
 	-> Solver&
 {
 	n_ = dist_->size();
@@ -154,25 +154,24 @@ auto Solver<Dist, TourCost>::held_karp(const Variant& variant, HeldKarpParams)
 	hk_cache_->dp.resize(table_sz);
 	hk_cache_->parent.resize(table_sz);
 
-	detail::held_karp_solve(
+	auto best_cost = detail::held_karp_solve(
 		*dist_, n_,
 		std::span<city_type>(tour_.data(), n_),
 		std::span<cost_type>(hk_cache_->dp.data(), table_sz),
 		std::span<city_type>(hk_cache_->parent.data(), table_sz),
-		variant);
+		variant_ref());
+
+	if (best_cost == std::numeric_limits<cost_type>::max()) {
+		n_ = 0;
+		cost_ = {};
+		status_ = SolutionStatus::infeasible;
+		return *this;
+	}
 
 	cost_ = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
 	status_ = SolutionStatus::optimal;
 	rebuild_position();
 	return *this;
-}
-
-// Without variant callbacks (forwards to primary).
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::held_karp(HeldKarpParams params)
-	-> Solver&
-{
-	return held_karp(NoCallbacks{}, params);
 }
 
 } // namespace periple

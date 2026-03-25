@@ -90,10 +90,11 @@ void test_strict(const Algo& algo, const Dist& dist,
                  std::span<const tsptw::TimeWindow> windows)
 {
 	tsptw::Strict tw(dist, windows);
-	Solver solver(dist);
-	algo(solver, tw);
+	Solver solver(dist, tw);
+	algo(solver);
 
-	if (solver.status() == SolutionStatus::partial) {
+	if (solver.status() == SolutionStatus::partial ||
+	    solver.status() == SolutionStatus::infeasible) {
 		// Some cities couldn't be placed (strict filter rejected everything).
 		// Valid partial tour: all placed cities are unique.
 		std::vector<bool> seen(dist.size(), false);
@@ -134,27 +135,13 @@ void test_relaxed(const Algo& algo, const Dist& dist,
 {
 	tsptw::Relaxed relaxed(dist, windows, penalty_weight);
 
-	// Test as per-move callbacks (DPMove for HK, no-op for NN).
-	{
-		Solver solver(dist);
-		algo(solver, relaxed);
-		assert_valid_tour(dist, solver.tour());
-
-		// Verify cost consistency: recompute with the relaxed tour_cost.
-		auto expected = relaxed(dist, solver.tour());
-		// For HK with DPMove callbacks, the DP cost may differ from
-		// tour_cost because DP optimizes penalized cost incrementally.
-		// The tour itself must be valid; cost from tour_cost is the reference.
-		(void)expected;
-	}
-
-	// Test as tour_cost (Solver-level).
+	// Test with variant on Solver.
 	{
 		Solver solver(dist, relaxed);
 		algo(solver);
 		assert_valid_tour(dist, solver.tour());
 
-		auto expected = relaxed(dist, solver.tour());
+		auto expected = relaxed.tour_cost(dist, solver.tour());
 		assert(solver.cost() == expected);
 	}
 }
