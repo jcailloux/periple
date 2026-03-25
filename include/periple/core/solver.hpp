@@ -1,7 +1,7 @@
 #pragma once
 
 #include <periple/core/traits.hpp>
-#include <periple/core/callbacks.hpp>
+#include <periple/core/moves.hpp>
 #include <periple/core/log.hpp>
 #include <periple/core/caches/hk_cache.hpp>
 
@@ -16,6 +16,13 @@
 namespace periple {
 
 // ---------------------------------------------------------------------------
+// Tags
+// ---------------------------------------------------------------------------
+
+struct DefaultTourCost {};
+struct NoCallbacks {};
+
+// ---------------------------------------------------------------------------
 // Parameter structs
 // ---------------------------------------------------------------------------
 
@@ -24,6 +31,10 @@ struct NearestNeighborParams {
 };
 
 struct HeldKarpParams {};
+
+struct ConstructParams {
+	std::size_t start_city = 0;
+};
 
 // ---------------------------------------------------------------------------
 // SolutionStatus
@@ -57,11 +68,11 @@ public:
 
 	// --- State reading ------------------------------------------------------
 
-	auto status()    const -> SolutionStatus;
-	auto size()      const -> std::size_t;
-	auto tour()      const -> std::span<const city_type>;
-	auto cost()      const -> cost_type;
-	bool symmetric() const;
+	[[nodiscard]] auto status()    const -> SolutionStatus;
+	[[nodiscard]] auto size()      const -> std::size_t;
+	[[nodiscard]] auto tour()      const -> std::span<const city_type>;
+	[[nodiscard]] auto cost()      const -> cost_type;
+	[[nodiscard]] auto symmetric() const -> bool;
 	void set_tour(std::span<const city_type> tour);
 	void set_symmetric(bool sym);
 	void set_symmetric(bool sym, unchecked_t);
@@ -70,18 +81,27 @@ public:
 
 	// Returns the k nearest neighbors of city, sorted by distance.
 	// Computed lazily on first call; grows if k exceeds previous requests.
-	auto neighbors(city_type city, std::size_t k) -> std::span<const city_type>;
+	[[nodiscard]] auto neighbors(city_type city, std::size_t k) -> std::span<const city_type>;
 
 	// --- Algorithms (defined inline in algorithms/*.hpp) --------------------
 
-	template <typename Callbacks = DefaultCallbacks>
-	auto nearest_neighbor(NearestNeighborParams params = {},
-	                      const Callbacks& cb = {}) -> Solver&;
+	auto nearest_neighbor(NearestNeighborParams params = {}) -> Solver&;
+
+	template <typename Variant>
+	auto nearest_neighbor(const Variant& variant,
+	                      NearestNeighborParams params = {}) -> Solver&;
 
 	auto held_karp(HeldKarpParams params = {}) -> Solver&;
 
-	template <typename Selector, typename Callbacks = DefaultCallbacks>
-	auto greedy_construct(const Selector& sel, const Callbacks& cb = {},
+	template <typename Variant>
+	auto held_karp(const Variant& variant, HeldKarpParams params = {}) -> Solver&;
+
+	template <typename Strategy>
+	auto greedy_construct(Strategy strategy,
+	                      ConstructParams params = {}) -> Solver&;
+
+	template <typename Strategy, typename Variant>
+	auto greedy_construct(Strategy strategy, const Variant& variant,
 	                      ConstructParams params = {}) -> Solver&;
 
 #ifdef PERIPLE_TESTING
@@ -182,7 +202,7 @@ auto Solver<Dist, TourCost>::cost() const -> cost_type {
 }
 
 template <DistanceSource Dist, typename TourCost>
-bool Solver<Dist, TourCost>::symmetric() const {
+auto Solver<Dist, TourCost>::symmetric() const -> bool {
 	return symmetric_;
 }
 

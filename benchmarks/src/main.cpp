@@ -1,6 +1,6 @@
 #include "benchmark_runner.hpp"
 
-#include <periple/core/registry.hpp>
+#include <periple/algorithms/registry.hpp>
 
 #include <cstdio>
 #include <cstring>

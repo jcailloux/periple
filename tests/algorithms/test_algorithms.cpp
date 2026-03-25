@@ -1,6 +1,6 @@
-#include <periple/core/registry.hpp>
+#include <periple/algorithms/registry.hpp>
 #include <periple/distance/matrix.hpp>
-#include <periple/core/jonker_volgenant.hpp>
+#include <periple/distance/jonker_volgenant.hpp>
 #include <solver_test_access.hpp>
 
 #include <algorithm>

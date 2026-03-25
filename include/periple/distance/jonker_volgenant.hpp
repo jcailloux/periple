@@ -34,7 +34,7 @@ public:
 		assert(n_ >= 2);
 	}
 
-	cost_type operator()(city_type ci, city_type cj) const {
+	[[nodiscard]] cost_type operator()(city_type ci, city_type cj) const {
 		auto i = static_cast<std::size_t>(ci);
 		auto j = static_cast<std::size_t>(cj);
 
@@ -119,7 +119,7 @@ private:
 
 	// Debug-only: verify that the tour alternates real and ghost cities.
 	[[nodiscard]] bool verify_alternation(
-		[[maybe_unused]] std::span<const city_type> sym) const {
+		std::span<const city_type> sym) const {
 		for (std::size_t i = 0; i + 1 < sym.size(); ++i) {
 			bool curr_ghost = static_cast<std::size_t>(sym[i]) >= n_;
 			bool next_ghost = static_cast<std::size_t>(sym[i + 1]) >= n_;

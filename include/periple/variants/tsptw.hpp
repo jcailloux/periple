@@ -4,7 +4,7 @@
 //
 // Savelsbergh (1985), "Local Search in Routing Problems with Time Windows"
 
-#include <periple/core/callbacks.hpp>
+#include <periple/core/moves.hpp>
 #include <periple/core/traits.hpp>
 
 #include <algorithm>
@@ -19,6 +19,8 @@ struct TimeWindow {
 	double earliest;
 	double latest;
 };
+
+namespace detail {
 
 // ---------------------------------------------------------------------------
 // WindowStore -- flat storage for per-city time windows
@@ -46,7 +48,7 @@ public:
 		sort_windows();
 	}
 
-	std::span<const TimeWindow> operator[](std::size_t city) const {
+	[[nodiscard]] std::span<const TimeWindow> operator[](std::size_t city) const {
 		return {windows_.data() + offsets_[city],
 		        offsets_[city + 1] - offsets_[city]};
 	}
@@ -69,8 +71,6 @@ private:
 // ---------------------------------------------------------------------------
 // Helpers -- shared feasibility and timing logic
 // ---------------------------------------------------------------------------
-
-namespace detail {
 
 // Returns true if arriving at this time fits in at least one window
 // (possibly after waiting for a later window to open).
@@ -120,16 +120,24 @@ struct Strict {
 	// Single window per city.
 	Strict(const Dist& dist, std::span<const TimeWindow> windows)
 		: dist_(&dist)
+		, n_(dist.size())
 		, store_(windows)
 		, arrival_times_(dist.size(), cost_type{})
-	{}
+	{
+		assert(windows.size() == dist.size());
+	}
 
 	// Multiple windows per city.
 	Strict(const Dist& dist, std::span<const std::vector<TimeWindow>> windows)
 		: dist_(&dist)
+		, n_(dist.size())
 		, store_(windows)
 		, arrival_times_(dist.size(), cost_type{})
-	{}
+	{
+		assert(windows.size() == dist.size());
+	}
+
+	// --- Constructive callbacks (AppendMove) ---
 
 	bool move_filter(std::span<const city_type> tour,
 	                 const AppendMove<city_type>& m) const
@@ -151,11 +159,27 @@ struct Strict {
 		}
 	}
 
+	// --- DP callbacks (DPMove) ---
+
+	bool move_filter(const DPMove<city_type, cost_type>& m) const {
+		ensure_dp_arrival();
+		return detail::is_feasible(windows_of(m.to), dp_arrival_at(m));
+	}
+
+	void on_improve(const DPMove<city_type, cost_type>& m) const {
+		ensure_dp_arrival();
+		std::size_t set_next = m.set |
+			(std::size_t{1} << static_cast<std::size_t>(m.to));
+		dp_arrival_[set_next * n_ + static_cast<std::size_t>(m.to)] =
+			dp_arrival_at(m);
+	}
+
 private:
 	std::span<const TimeWindow> windows_of(city_type city) const {
 		return store_[static_cast<std::size_t>(city)];
 	}
 
+	// Arrival time for constructive (sequential) path.
 	double next_arrival(std::span<const city_type> tour,
 	                    std::size_t from_pos, city_type to) const
 	{
@@ -166,13 +190,29 @@ private:
 		return depart + static_cast<double>((*dist_)(from, to));
 	}
 
+	// Arrival time at m.to for a DP transition.
+	double dp_arrival_at(const DPMove<city_type, cost_type>& m) const {
+		double arr = dp_arrival_[m.set * n_ + static_cast<std::size_t>(m.from)];
+		double depart = detail::departure_time(windows_of(m.from), arr);
+		return depart + static_cast<double>(m.distance);
+	}
+
+	void ensure_dp_arrival() const {
+		if (!dp_arrival_.empty()) return;
+		dp_arrival_.resize(n_ * (std::size_t{1} << n_), 0.0);
+		// Base state: arrival at city 0 in set {0} is time 0.
+		dp_arrival_[1 * n_ + 0] = 0.0;
+	}
+
 	const Dist* dist_;
-	WindowStore store_;
-	mutable std::vector<cost_type> arrival_times_;
+	std::size_t n_;
+	detail::WindowStore store_;
+	mutable std::vector<cost_type> arrival_times_;  // constructive: indexed by position
+	mutable std::vector<double> dp_arrival_;         // DP: indexed by set*n + city
 };
 
 // ---------------------------------------------------------------------------
-// Relaxed: soft constraint via tour_cost penalties (no rejection)
+// Relaxed: soft constraint via penalties
 // ---------------------------------------------------------------------------
 
 template <DistanceSource Dist>
@@ -180,21 +220,28 @@ struct Relaxed {
 	using cost_type = typename dist_traits<Dist>::cost_type;
 	using city_type = typename dist_traits<Dist>::city_type;
 
-	// Single window per city.  dist is used only for template deduction.
-	Relaxed(const Dist&, std::span<const TimeWindow> windows,
+	// Single window per city.
+	Relaxed(const Dist& dist, std::span<const TimeWindow> windows,
 	        cost_type penalty_weight = 1000)
-		: store_(windows)
+		: n_(dist.size())
+		, store_(windows)
 		, penalty_weight_(penalty_weight)
-	{}
+	{
+		assert(windows.size() == dist.size());
+	}
 
-	// Multiple windows per city.  dist is used only for template deduction.
-	Relaxed(const Dist&, std::span<const std::vector<TimeWindow>> windows,
+	// Multiple windows per city.
+	Relaxed(const Dist& dist, std::span<const std::vector<TimeWindow>> windows,
 	        cost_type penalty_weight = 1000)
-		: store_(windows)
+		: n_(dist.size())
+		, store_(windows)
 		, penalty_weight_(penalty_weight)
-	{}
+	{
+		assert(windows.size() == dist.size());
+	}
 
-	// tour_cost callable: distance + penalty for late arrivals.
+	// --- tour_cost callable: distance + penalty for late arrivals ---
+
 	auto operator()(const Dist& dist,
 	                std::span<const city_type> tour) const -> cost_type
 	{
@@ -218,13 +265,47 @@ struct Relaxed {
 		return distance_cost + penalty_cost;
 	}
 
+	// --- DP callbacks (DPMove) ---
+
+	auto move_eval(const DPMove<city_type, cost_type>& m) const -> cost_type {
+		ensure_dp_arrival();
+		double arr_to = dp_arrival_at(m);
+		double violation = detail::violation_amount(windows_of(m.to), arr_to);
+		if (violation > 0.0)
+			return m.distance + static_cast<cost_type>(
+				static_cast<double>(penalty_weight_) * violation);
+		return m.distance;
+	}
+
+	void on_improve(const DPMove<city_type, cost_type>& m) const {
+		ensure_dp_arrival();
+		std::size_t set_next = m.set |
+			(std::size_t{1} << static_cast<std::size_t>(m.to));
+		dp_arrival_[set_next * n_ + static_cast<std::size_t>(m.to)] =
+			dp_arrival_at(m);
+	}
+
 private:
 	std::span<const TimeWindow> windows_of(city_type city) const {
 		return store_[static_cast<std::size_t>(city)];
 	}
 
-	WindowStore store_;
+	double dp_arrival_at(const DPMove<city_type, cost_type>& m) const {
+		double arr = dp_arrival_[m.set * n_ + static_cast<std::size_t>(m.from)];
+		double depart = detail::departure_time(windows_of(m.from), arr);
+		return depart + static_cast<double>(m.distance);
+	}
+
+	void ensure_dp_arrival() const {
+		if (!dp_arrival_.empty()) return;
+		dp_arrival_.resize(n_ * (std::size_t{1} << n_), 0.0);
+		dp_arrival_[1 * n_ + 0] = 0.0;
+	}
+
+	std::size_t n_;
+	detail::WindowStore store_;
 	cost_type penalty_weight_;
+	mutable std::vector<double> dp_arrival_;  // DP: indexed by set*n + city
 };
 
 } // namespace periple::tsptw

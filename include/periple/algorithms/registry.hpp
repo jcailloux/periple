@@ -22,8 +22,11 @@ struct AlgoNearestNeighbor {
 	static constexpr bool is_metaheuristic  = false;
 	static constexpr int  max_tier          = 5;
 
-	template <DistanceSource Dist>
-	void operator()(Solver<Dist>& s, unsigned = 0) const { s.nearest_neighbor(); }
+	template <DistanceSource Dist, typename TC>
+	void operator()(Solver<Dist, TC>& s, unsigned = 0) const { s.nearest_neighbor(); }
+
+	template <DistanceSource Dist, typename TC, typename Variant>
+	void operator()(Solver<Dist, TC>& s, const Variant& variant) const { s.nearest_neighbor(variant); }
 };
 
 struct AlgoHeldKarp {
@@ -34,8 +37,11 @@ struct AlgoHeldKarp {
 	static constexpr bool is_metaheuristic  = false;
 	static constexpr int  max_tier          = 1;
 
-	template <DistanceSource Dist>
-	void operator()(Solver<Dist>& s, unsigned = 0) const { s.held_karp(); }
+	template <DistanceSource Dist, typename TC>
+	void operator()(Solver<Dist, TC>& s, unsigned = 0) const { s.held_karp(); }
+
+	template <DistanceSource Dist, typename TC, typename Variant>
+	void operator()(Solver<Dist, TC>& s, const Variant& variant) const { s.held_karp(variant); }
 };
 
 // Master list -- add new algorithms here.

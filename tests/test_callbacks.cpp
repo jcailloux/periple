@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 using namespace periple;
@@ -23,7 +24,7 @@ auto make_mat4() {
 }
 
 // ---------------------------------------------------------------------------
-// Regression: DefaultCallbacks produce the same result as before
+// Regression: NoCallbacks produce the same result as before
 // ---------------------------------------------------------------------------
 
 void test_regression_nn_default() {
@@ -37,9 +38,9 @@ void test_regression_nn_default() {
 	// NN from 0: 0->1(10)->3(25)->2(30), cost=10+25+30+15=80
 	assert(solver.cost() == 80);
 
-	// Explicit DefaultCallbacks should give the same result.
+	// Explicit NoCallbacks should give the same result.
 	solver.clear();
-	solver.nearest_neighbor({}, DefaultCallbacks{});
+	solver.nearest_neighbor(NoCallbacks{});
 	assert(solver.cost() == 80);
 }
 
@@ -59,7 +60,7 @@ void test_protocol_nn_logging() {
 	auto mat = make_mat4();
 	LoggingCallbacks cb;
 	Solver solver(mat);
-	solver.nearest_neighbor({}, cb);
+	solver.nearest_neighbor(cb);
 
 	// n=4 cities.  Fresh build: on_commit for start city, then 3 steps.
 	// Step 1: move_filter x3 candidates, on_commit x1
@@ -85,7 +86,7 @@ void test_protocol_nn_n1() {
 	SymmetricDistanceMatrix<int> mat(1);
 	LoggingCallbacks cb;
 	Solver solver(mat);
-	solver.nearest_neighbor({}, cb);
+	solver.nearest_neighbor(cb);
 
 	assert(solver.tour().size() == 1);
 	std::size_t filter_count = 0, commit_count = 0;
@@ -112,17 +113,15 @@ void test_move_filter_reject() {
 	auto mat = make_mat4();
 	RejectCity1 cb;
 	Solver solver(mat);
-	solver.nearest_neighbor({.start_city = 0}, cb);
+	solver.nearest_neighbor(cb, {.start_city = 0});
 
-	// Without filter, NN from 0 goes to 1 (nearest, dist 10).
-	// With filter rejecting city 1, city 1 cannot be 2nd.
+	// City 1 is always rejected by the filter.
+	// Steps: 0->2(15)->3(30)->nullopt. Partial tour.
+	assert(solver.status() == SolutionStatus::partial);
+	assert(solver.tour().size() == 3);
 	assert(solver.tour()[0] == 0);
-	assert(solver.tour()[1] != 1);
-	// City 1 still appears (fallback puts it somewhere).
-	bool has_1 = false;
 	for (auto c : solver.tour())
-		if (c == 1) has_1 = true;
-	assert(has_1);
+		assert(c != 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -190,15 +189,31 @@ void test_custom_tour_cost_set_tour() {
 // ---------------------------------------------------------------------------
 
 struct FarthestSelector {
-	template <DistanceSource Dist, typename Callbacks>
-	auto evaluate(const Dist& dist,
-	              std::span<const typename dist_traits<Dist>::city_type> tour,
-	              typename dist_traits<Dist>::city_type candidate,
-	              const Callbacks&) const
-		-> typename dist_traits<Dist>::cost_type
+	template <DistanceSource Dist>
+	auto select_next(const Dist& dist,
+	                 std::span<const typename dist_traits<Dist>::city_type> tour,
+	                 std::span<const uint8_t> visited) const
+		-> std::optional<typename dist_traits<Dist>::city_type>
 	{
-		// Negate distance: minimizing the negative = maximizing distance.
-		return -dist(tour.back(), candidate);
+		using city_type = typename dist_traits<Dist>::city_type;
+		using cost_type = typename dist_traits<Dist>::cost_type;
+		const auto n = visited.size();
+		cost_type best_dist{};
+		city_type best_city{};
+		bool found = false;
+
+		for (std::size_t j = 0; j < n; ++j) {
+			if (visited[j]) continue;
+			auto c = static_cast<city_type>(j);
+			auto d = dist(tour.back(), c);
+			if (!found || d > best_dist) {
+				best_dist = d;
+				best_city = c;
+				found = true;
+			}
+		}
+		if (!found) return std::nullopt;
+		return best_city;
 	}
 };
 
@@ -289,7 +304,7 @@ void test_move_eval_changes_selection() {
 	// NN picks any city with score 0 instead of city 1.
 	DistancePlusBias cb;
 	Solver solver(mat);
-	solver.nearest_neighbor({}, cb);
+	solver.nearest_neighbor(cb);
 	assert(solver.tour()[1] != 1);
 }
 
@@ -315,7 +330,7 @@ void test_move_score_overrides_eval() {
 
 	EvalAndScore cb;
 	Solver solver(mat);
-	solver.nearest_neighbor({}, cb);
+	solver.nearest_neighbor(cb);
 
 	// move_score gives city 2 the best score (-1), so it should be picked first.
 	assert(solver.tour()[1] == 2);
@@ -339,7 +354,7 @@ void test_score_type_deduction() {
 	auto mat = make_mat4();
 	FractionalScore cb;
 	Solver solver(mat);
-	solver.nearest_neighbor({}, cb);
+	solver.nearest_neighbor(cb);
 
 	// City 2 has the lowest score (0.1).  If scores were truncated to int,
 	// cities 1 and 2 would both be 0 and the result would depend on iteration
@@ -358,7 +373,7 @@ void test_partial_tour_with_callbacks() {
 	LoggingCallbacks cb;
 	Solver solver(mat);
 	solver.set_tour(prefix);
-	solver.nearest_neighbor({}, cb);
+	solver.nearest_neighbor(cb);
 
 	// Prefix preserved.
 	assert(solver.tour()[0] == 0);
@@ -405,7 +420,7 @@ void test_asymmetric_with_callbacks() {
 
 	LoggingCallbacks cb;
 	Solver solver(mat);
-	solver.nearest_neighbor({}, cb);
+	solver.nearest_neighbor(cb);
 
 	assert(solver.tour().size() == 3);
 
@@ -434,16 +449,17 @@ void test_tsptw_strict_nn() {
 
 	tsptw::Strict tw(mat, windows);
 	Solver solver(mat);
-	solver.nearest_neighbor({}, tw);
+	solver.nearest_neighbor(tw);
 
 	// Without strict: NN from 0 -> 1(10) -> 3(25) -> 2(30).
-	// With strict: 0->1 rejected (arrival 10 > 1).
-	// From 0: pick 2 (dist 15). From 2: 2->1 arr=50>1 rejected, pick 3.
-	// From 3: 3->1 rejected, fallback picks 1. Tour: {0,2,3,1}.
+	// With strict: 0->1 rejected (arrival 10 > 1) at every step.
+	// From 0: pick 2 (dist 15). From 2: 2->1 rejected, pick 3.
+	// From 3: 3->1 rejected, no candidates -> partial tour {0,2,3}.
+	assert(solver.status() == SolutionStatus::partial);
+	assert(solver.tour().size() == 3);
 	assert(solver.tour()[0] == 0);
 	assert(solver.tour()[1] == 2);
 	assert(solver.tour()[2] == 3);
-	assert(solver.tour()[3] == 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -525,7 +541,7 @@ void test_tsptw_strict_multi_window() {
 
 	tsptw::Strict tw(mat, windows);
 	Solver solver(mat);
-	solver.nearest_neighbor({}, tw);
+	solver.nearest_neighbor(tw);
 
 	// NN from 0: candidates {1, 2}.
 	// 0->2: dist=3, arrival=3, window [0,100] OK. Nearest.
@@ -560,7 +576,7 @@ void test_tsptw_strict_multi_window_reject() {
 
 	tsptw::Strict tw(mat, windows);
 	Solver solver(mat);
-	solver.nearest_neighbor({}, tw);
+	solver.nearest_neighbor(tw);
 
 	// From 0: 0->1 arrival=10, both windows latest=2 and 6 < 10. Rejected.
 	// 0->2 arrival=3, OK. Pick 2.
@@ -594,7 +610,7 @@ void test_neighbors_grow() {
 	Solver solver(mat);
 
 	// First request with k=1.
-	solver.neighbors(0, 1);
+	(void)solver.neighbors(0, 1);
 
 	// Grow to k=2.
 	auto n = solver.neighbors(0, 2);
@@ -612,7 +628,7 @@ void test_neighbors_invalidate() {
 	});
 
 	Solver solver(mat);
-	solver.neighbors(0, 1);
+	(void)solver.neighbors(0, 1);
 
 	// Switch matrix: neighbors must be recomputed.
 	solver.set_matrix(mat2);

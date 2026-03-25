@@ -122,22 +122,22 @@ Algorithm methods return `Solver&` for chaining:
 solver.nearest_neighbor().two_opt();
 ```
 
-### Callbacks & variants
+### Variant callbacks
 
-Customize algorithm behavior without modifying internal logic. Callbacks are optional and zero-overhead when not used.
+Customize algorithm behavior without modifying internal logic. Variant callbacks are optional and zero-overhead when not used.
 
 ```cpp
 #include <periple/variants/tsptw.hpp>
 
 // TSPTW: reject moves that violate time windows
 periple::tsptw::Strict tw(dist, windows);
-solver.nearest_neighbor({}, tw);
+solver.nearest_neighbor(tw);
 
 // Custom construction strategy
-solver.greedy_construct(MySelector{}, my_callbacks);
+solver.greedy_construct(MyStrategy{});
 ```
 
-See [CALLBACKS.md](CALLBACKS.md) for the callback mechanism (selectors, move types, partial tours) and [VARIANTS.md](VARIANTS.md) for pre-built variants (TSPTW, etc.).
+See [CALLBACKS.md](CALLBACKS.md) for the callback architecture and [VARIANTS.md](VARIANTS.md) for pre-built variants (TSPTW, etc.).
 
 ### Available algorithms
 
@@ -148,8 +148,16 @@ See [CALLBACKS.md](CALLBACKS.md) for the callback mechanism (selectors, move typ
 
 ATSP support: **full** = native asymmetric support, **adapted** = supported with different characteristics, **not yet** = symmetric only (use `jonker_volgenant()` to wrap your matrix).
 
+### Generic frameworks
+
+These are building blocks that require a user-supplied strategy. Complexity and ATSP correctness depend on the strategy. See [CALLBACKS.md](CALLBACKS.md).
+
+| Framework | Category | Complexity with O(1) strategy |
+|-----------|----------|-------------------------------|
+| Greedy construct | Construction | O(n) |
+
 > [!WARNING]
-> Per-move callbacks defined for an ATSP instance are not compatible with the symmetric problem obtained via `jonker_volgenant()`.
+> Per-move variant callbacks defined for an ATSP instance are not compatible with the symmetric problem obtained via `jonker_volgenant()`.
 
 ### Selective includes
 
@@ -271,13 +279,16 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 
 ### Algorithms
 
-All algorithm methods return `Solver&` for chaining. Each accepts an optional parameter struct with sensible defaults.
+All algorithm methods return `Solver&` for chaining.
 
-| Method | Default parameters |
-|--------|--------------------|
-| `nearest_neighbor(params, callbacks)` | `{.start_city = 0}`, `DefaultCallbacks{}` |
-| `held_karp(params)` | `{}` |
-| `greedy_construct(selector, callbacks, params)` | `NearestSelector{}`, `DefaultCallbacks{}`, `{.start_city = 0}` |
+| Method | Description |
+|--------|-------------|
+| `nearest_neighbor(params)` | Construction heuristic |
+| `nearest_neighbor(variant, params)` | With variant callbacks |
+| `held_karp(params)` | Exact solver |
+| `held_karp(variant, params)` | With variant callbacks (`DPMove`: filter, eval, on_improve) |
+| `greedy_construct(strategy, params)` | Generic construction framework |
+| `greedy_construct(strategy, variant, params)` | With variant callbacks forwarded to strategy |
 
 </details>
 

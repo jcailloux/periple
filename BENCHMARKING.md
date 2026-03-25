@@ -72,7 +72,7 @@ kroA100      100      21282    24310    14.22      0.04  yes    feasible
 
 ## Adding an algorithm to the benchmark
 
-Register it in the shared algorithm registry (`include/periple/core/registry.hpp`). Both the benchmark runner and the test suite pick it up automatically. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist and what benchmark results to include in a PR.
+Register it in the shared algorithm registry (`include/periple/algorithms/registry.hpp`). Both the benchmark runner and the test suite pick it up automatically. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist and what benchmark results to include in a PR.
 
 ## Symmetric TSP only
 

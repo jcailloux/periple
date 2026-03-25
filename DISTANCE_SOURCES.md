@@ -101,7 +101,7 @@ periple::CoordinateDistance cd(cities, weighted_l1);
 `JonkerVolgenantView` wraps any asymmetric N-city distance source as a symmetric 2N-city one, enabling symmetric-only algorithms (nearest neighbor, 2-opt, LK, ...) to solve ATSP instances transparently.
 
 ```cpp
-#include <periple/core/jonker_volgenant.hpp>
+#include <periple/distance/jonker_volgenant.hpp>
 
 periple::DistanceMatrix<int> asym(n, {/* asymmetric */});
 

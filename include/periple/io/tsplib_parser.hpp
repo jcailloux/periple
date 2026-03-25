@@ -149,7 +149,6 @@ inline SymmetricDistanceMatrix<int> read_full_matrix(
 	return mat;
 }
 
-
 // Shared header parsing: reads DIMENSION, EDGE_WEIGHT_TYPE, EDGE_WEIGHT_FORMAT,
 // then stops at the data section keyword, returning what was found.
 struct TsplibHeader {

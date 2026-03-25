@@ -107,6 +107,8 @@ inline int att(const double* a, const double* b) {
 	return (t < r) ? t + 1 : t;
 }
 
+namespace detail {
+
 // TSPLIB coordinate-to-radians conversion.
 // Uses PI = 3.141592 (not M_PI) per the TSPLIB95 specification.
 inline double geo_to_radians(double coord) {
@@ -116,11 +118,13 @@ inline double geo_to_radians(double coord) {
 	return pi * (deg + 5.0 * min / 3.0) / 180.0;
 }
 
+} // namespace detail
+
 // GEO: great-circle distance. Uses Earth radius RRR = 6378.388 per TSPLIB95.
 inline int geo(const double* a, const double* b) {
 	constexpr double rrr = 6378.388;
-	double lat1 = geo_to_radians(a[0]), lon1 = geo_to_radians(a[1]);
-	double lat2 = geo_to_radians(b[0]), lon2 = geo_to_radians(b[1]);
+	double lat1 = detail::geo_to_radians(a[0]), lon1 = detail::geo_to_radians(a[1]);
+	double lat2 = detail::geo_to_radians(b[0]), lon2 = detail::geo_to_radians(b[1]);
 	double q1 = std::cos(lon1 - lon2);
 	double q2 = std::cos(lat1 - lat2);
 	double q3 = std::cos(lat1 + lat2);

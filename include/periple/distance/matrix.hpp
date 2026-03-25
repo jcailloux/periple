@@ -43,14 +43,14 @@ public:
 		}
 	}
 
-	cost_type operator()(city_type i, city_type j) const {
-		return data_[static_cast<std::size_t>(i) * n_ +
-					 static_cast<std::size_t>(j)];
+	[[nodiscard]] cost_type operator()(city_type i, city_type j) const {
+		return data_[static_cast<std::size_t>(i) * n_
+			+ static_cast<std::size_t>(j)];
 	}
 
 	cost_type& operator()(city_type i, city_type j) {
-		return data_[static_cast<std::size_t>(i) * n_ +
-					 static_cast<std::size_t>(j)];
+		return data_[static_cast<std::size_t>(i) * n_
+			+ static_cast<std::size_t>(j)];
 	}
 
 	[[nodiscard]] std::size_t size() const { return n_; }
@@ -85,7 +85,7 @@ public:
 		}
 	}
 
-	cost_type operator()(city_type i, city_type j) const {
+	[[nodiscard]] cost_type operator()(city_type i, city_type j) const {
 		auto a = static_cast<std::size_t>(i);
 		auto b = static_cast<std::size_t>(j);
 		if (a == b) return cost_type{};

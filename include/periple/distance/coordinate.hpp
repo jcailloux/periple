@@ -34,7 +34,7 @@ public:
 
 	// Flat coordinates: [x0,y0,z0, x1,y1,z1, ...], n deduced from size/dim.
 	CoordinateDistance(
-		const std::size_t dim,
+		std::size_t dim,
 		std::vector<double> coords, DistFunc dist_fn)
 		: n_(coords.size() / dim), dim_(dim)
 		, coords_(std::move(coords))
@@ -76,7 +76,7 @@ public:
 		, dist_fn_(std::move(dist_fn))
 	{}
 
-	cost_type operator()(const city_type i, const city_type j) const {
+	[[nodiscard]] cost_type operator()(city_type i, city_type j) const {
 		if (i == j) return cost_type{};
 		return dist_fn_(
 			coords_.data() + static_cast<std::size_t>(i) * dim_,
@@ -87,7 +87,7 @@ public:
 	[[nodiscard]] std::size_t size() const { return n_; }
 	[[nodiscard]] std::size_t dim() const { return dim_; }
 
-	const double* point(city_type i) const {
+	[[nodiscard]] const double* point(city_type i) const {
 		return coords_.data() + static_cast<std::size_t>(i) * dim_;
 	}
 

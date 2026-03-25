@@ -1,4 +1,4 @@
-#include <periple/core/jonker_volgenant.hpp>
+#include <periple/distance/jonker_volgenant.hpp>
 #include <periple/distance/matrix.hpp>
 #include <periple/core/solver.hpp>
 #include <periple/algorithms/nearest_neighbor.hpp>

@@ -14,16 +14,18 @@
 namespace periple {
 namespace detail {
 
-template <DistanceSource Dist>
+template <DistanceSource Dist, typename Variant>
 auto held_karp_solve(
 	const Dist& dist, std::size_t n,
 	std::span<typename dist_traits<Dist>::city_type> tour,
 	std::span<typename dist_traits<Dist>::cost_type> dp,
-	std::span<typename dist_traits<Dist>::city_type> parent)
+	std::span<typename dist_traits<Dist>::city_type> parent,
+	const Variant& variant)
 	-> typename dist_traits<Dist>::cost_type
 {
 	using cost_type = typename dist_traits<Dist>::cost_type;
 	using city_type = typename dist_traits<Dist>::city_type;
+	using move_type = DPMove<city_type, cost_type>;
 
 	if (n <= 1) {
 		if (n == 1) tour[0] = city_type{0};
@@ -45,37 +47,80 @@ auto held_karp_solve(
 	// Forward DP
 	const std::size_t complement_mask = num_sets - 1;
 	for (std::size_t S = 1; S < num_sets; S += 2) { // S += 2: city 0 always in set
-		// Iterate only over cities in S
 		for (auto si = S; si; si &= si - 1) {
 			auto i = static_cast<std::size_t>(std::countr_zero(si));
-			if (dp[idx(S, i)] == INF) continue; // unreachable state
+			if (dp[idx(S, i)] == INF) continue;
 
-			// Iterate only over cities not in S
+			auto ci = static_cast<city_type>(i);
+
 			for (auto sj = ~S & complement_mask; sj; sj &= sj - 1) {
 				auto j = static_cast<std::size_t>(std::countr_zero(sj));
+				auto cj = static_cast<city_type>(j);
+				auto raw_dist = dist(ci, cj);
+
+				move_type move{ci, cj, dp[idx(S, i)], raw_dist, S};
+
+				if constexpr (requires {
+					{ variant.move_filter(move) } -> std::convertible_to<bool>;
+				}) {
+					if (!variant.move_filter(move)) continue;
+				}
+
+				cost_type edge_cost;
+				if constexpr (requires {
+					{ variant.move_eval(move) } -> std::convertible_to<cost_type>;
+				}) {
+					edge_cost = static_cast<cost_type>(variant.move_eval(move));
+				} else {
+					edge_cost = raw_dist;
+				}
+
 				std::size_t S_next = S | (std::size_t{1} << j);
-				cost_type new_cost = dp[idx(S, i)] +
-					dist(static_cast<city_type>(i),
-						 static_cast<city_type>(j));
+				cost_type new_cost = dp[idx(S, i)] + edge_cost;
 				if (new_cost < dp[idx(S_next, j)]) {
 					dp[idx(S_next, j)]     = new_cost;
-					parent[idx(S_next, j)] = static_cast<city_type>(i);
+					parent[idx(S_next, j)] = ci;
+
+					if constexpr (requires { variant.on_improve(move); }) {
+						variant.on_improve(move);
+					}
 				}
 			}
 		}
 	}
 
-	// Find optimal last city
+	// Find optimal last city (close the tour back to 0)
 	const std::size_t full = num_sets - 1;
 	cost_type best_cost = INF;
 	city_type best_last{};
 
 	for (std::size_t i = 1; i < n; ++i) {
-		cost_type c = dp[idx(full, i)] +
-			dist(static_cast<city_type>(i), city_type{0});
+		if (dp[idx(full, i)] == INF) continue;
+
+		auto ci = static_cast<city_type>(i);
+		auto raw_dist = dist(ci, city_type{0});
+
+		move_type move{ci, city_type{0}, dp[idx(full, i)], raw_dist, full};
+
+		if constexpr (requires {
+			{ variant.move_filter(move) } -> std::convertible_to<bool>;
+		}) {
+			if (!variant.move_filter(move)) continue;
+		}
+
+		cost_type edge_cost;
+		if constexpr (requires {
+			{ variant.move_eval(move) } -> std::convertible_to<cost_type>;
+		}) {
+			edge_cost = static_cast<cost_type>(variant.move_eval(move));
+		} else {
+			edge_cost = raw_dist;
+		}
+
+		cost_type c = dp[idx(full, i)] + edge_cost;
 		if (c < best_cost) {
 			best_cost = c;
-			best_last = static_cast<city_type>(i);
+			best_last = ci;
 		}
 	}
 
@@ -93,8 +138,11 @@ auto held_karp_solve(
 
 } // namespace detail
 
+// With variant callbacks (primary implementation).
 template <DistanceSource Dist, typename TourCost>
-inline auto Solver<Dist, TourCost>::held_karp(HeldKarpParams) -> Solver&
+template <typename Variant>
+auto Solver<Dist, TourCost>::held_karp(const Variant& variant, HeldKarpParams)
+	-> Solver&
 {
 	n_ = dist_->size();
 	ensure_shared(n_);
@@ -110,12 +158,21 @@ inline auto Solver<Dist, TourCost>::held_karp(HeldKarpParams) -> Solver&
 		*dist_, n_,
 		std::span<city_type>(tour_.data(), n_),
 		std::span<cost_type>(hk_cache_->dp.data(), table_sz),
-		std::span<city_type>(hk_cache_->parent.data(), table_sz));
+		std::span<city_type>(hk_cache_->parent.data(), table_sz),
+		variant);
 
 	cost_ = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
 	status_ = SolutionStatus::optimal;
 	rebuild_position();
 	return *this;
+}
+
+// Without variant callbacks (forwards to primary).
+template <DistanceSource Dist, typename TourCost>
+auto Solver<Dist, TourCost>::held_karp(HeldKarpParams params)
+	-> Solver&
+{
+	return held_karp(NoCallbacks{}, params);
 }
 
 } // namespace periple
