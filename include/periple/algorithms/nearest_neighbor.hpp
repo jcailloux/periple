@@ -5,6 +5,7 @@
 // Rosenkrantz, Stearns, Lewis (1977), "An Analysis of Several Heuristics for the Traveling Salesman Problem"
 
 #include <periple/algorithms/greedy_construct.hpp>
+#include <periple/core/dispatch.hpp>
 
 #include <limits>
 #include <optional>
@@ -15,8 +16,7 @@ namespace periple {
 // Strategy for greedy_construct: selects the nearest unvisited city.
 //
 // Without variant callbacks (3-arg): scores by distance.
-// With variant callbacks (4-arg): uses move_filter, move_eval > dist,
-// and delegates on_move via on_placed.
+// With variant callbacks (4-arg): uses move_filter and move_eval > dist.
 struct NearestSelector {
 
 	// --- Without variant callbacks ---
@@ -72,13 +72,9 @@ struct NearestSelector {
 			if (visited[j]) continue;
 			auto candidate = static_cast<city_type>(j);
 
-			if constexpr (requires {
-				{ variant.move_filter(tour, AppendMove<city_type>{candidate}) }
-					-> std::convertible_to<bool>;
-			}) {
-				if (!variant.move_filter(tour, AppendMove<city_type>{candidate}))
-					continue;
-			}
+			if (!detail::dispatch_filter(variant, tour,
+			                             AppendMove<city_type>{candidate}))
+				continue;
 
 			auto s = score(dist, tour, candidate, variant);
 			if (!found || s < best_score) {
@@ -91,20 +87,6 @@ struct NearestSelector {
 		if (!found)
 			return std::nullopt;
 		return best_city;
-	}
-
-	template <DistanceSource Dist, typename Variant>
-	void on_placed(const Dist&,
-	               std::span<const typename dist_traits<Dist>::city_type> tour,
-	               std::span<const uint8_t>,
-	               const Variant& variant) const
-	{
-		using city_type = typename dist_traits<Dist>::city_type;
-		if constexpr (requires {
-			variant.on_move(tour, AppendMove<city_type>{tour.back()});
-		}) {
-			variant.on_move(tour, AppendMove<city_type>{tour.back()});
-		}
 	}
 
 private:

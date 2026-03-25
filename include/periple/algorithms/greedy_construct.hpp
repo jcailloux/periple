@@ -9,6 +9,7 @@
 // Variant callbacks are forwarded to the strategy's methods when they
 // accept a callbacks parameter (4-arg). Otherwise the 3-arg form is called.
 
+#include <periple/core/apply.hpp>
 #include <periple/core/solver.hpp>
 
 #include <optional>
@@ -32,28 +33,6 @@ auto call_select_next(
 		return strategy.select_next(dist, tour, visited, variant);
 	} else {
 		return strategy.select_next(dist, tour, visited);
-	}
-}
-
-// Calls strategy.on_placed with or without variant callbacks,
-// if the method exists at all.  The strategy's on_placed callback
-// (framework -> strategy) typically propagates to the variant's
-// on_move callback (strategy -> variant).
-template <DistanceSource Dist, typename Strategy, typename Variant>
-void call_on_placed(
-	Strategy& strategy, const Dist& dist,
-	std::span<const typename dist_traits<Dist>::city_type> tour,
-	std::span<const uint8_t> visited,
-	const Variant& variant)
-{
-	if constexpr (requires {
-		strategy.on_placed(dist, tour, visited, variant);
-	}) {
-		strategy.on_placed(dist, tour, visited, variant);
-	} else if constexpr (requires {
-		strategy.on_placed(dist, tour, visited);
-	}) {
-		strategy.on_placed(dist, tour, visited);
 	}
 }
 
@@ -84,15 +63,8 @@ auto greedy_append_build(
 		if (!next)
 			return {step, path_cost};
 
-		// Accumulate edge cost for the open path.
-		if (step > 0)
-			path_cost += dist(tour[step - 1], *next);
-
-		tour[step] = *next;
-		visited[static_cast<std::size_t>(*next)] = 1;
-
-		call_on_placed(strategy, dist,
-			std::span<const city_type>(tour.data(), step + 1), vis, variant);
+		path_cost = apply_append(dist, tour, step, visited, *next,
+		                         path_cost, variant);
 	}
 	return {n, path_cost};
 }
@@ -151,13 +123,13 @@ auto Solver<Dist, Variant>::greedy_construct(
 		}
 		std::fill_n(visited_.data(), n, uint8_t{0});
 		auto start = static_cast<city_type>(params.start_city);
-		tour_[0] = start;
-		visited_[params.start_city] = 1;
+		initial_cost = detail::apply_append(
+			*dist_,
+			std::span<city_type>(tour_.data(), n),
+			std::size_t{0},
+			std::span<uint8_t>(visited_.data(), n),
+			start, cost_type{}, variant);
 		start_step = 1;
-
-		detail::call_on_placed(strategy, *dist_,
-			std::span<const city_type>(tour_.data(), 1),
-			std::span<const uint8_t>(visited_.data(), n), variant);
 	}
 
 	auto result = detail::greedy_append_build(

@@ -5,6 +5,7 @@
 // Bellman (1962), "Dynamic Programming Treatment of the Travelling Salesman Problem"
 // Held, Karp (1962), "A Dynamic Programming Approach to Sequencing Problems"
 
+#include <periple/core/dispatch.hpp>
 #include <periple/core/solver.hpp>
 
 #include <bit>
@@ -60,20 +61,10 @@ auto held_karp_solve(
 
 				move_type move{ci, cj, dp[idx(S, i)], raw_dist, S};
 
-				if constexpr (requires {
-					{ variant.move_filter(move) } -> std::convertible_to<bool>;
-				}) {
-					if (!variant.move_filter(move)) continue;
-				}
+				if (!dispatch_filter(variant, move)) continue;
 
-				cost_type edge_cost;
-				if constexpr (requires {
-					{ variant.move_eval(move) } -> std::convertible_to<cost_type>;
-				}) {
-					edge_cost = static_cast<cost_type>(variant.move_eval(move));
-				} else {
-					edge_cost = raw_dist;
-				}
+				cost_type edge_cost = dispatch_eval<cost_type>(
+					raw_dist, variant, move);
 
 				std::size_t S_next = S | (std::size_t{1} << j);
 				cost_type new_cost = dp[idx(S, i)] + edge_cost;
@@ -81,9 +72,7 @@ auto held_karp_solve(
 					dp[idx(S_next, j)]     = new_cost;
 					parent[idx(S_next, j)] = ci;
 
-					if constexpr (requires { variant.on_move(move); }) {
-						variant.on_move(move);
-					}
+					dispatch_on_move(variant, move);
 				}
 			}
 		}
@@ -102,20 +91,10 @@ auto held_karp_solve(
 
 		move_type move{ci, city_type{0}, dp[idx(full, i)], raw_dist, full};
 
-		if constexpr (requires {
-			{ variant.move_filter(move) } -> std::convertible_to<bool>;
-		}) {
-			if (!variant.move_filter(move)) continue;
-		}
+		if (!dispatch_filter(variant, move)) continue;
 
-		cost_type edge_cost;
-		if constexpr (requires {
-			{ variant.move_eval(move) } -> std::convertible_to<cost_type>;
-		}) {
-			edge_cost = static_cast<cost_type>(variant.move_eval(move));
-		} else {
-			edge_cost = raw_dist;
-		}
+		cost_type edge_cost = dispatch_eval<cost_type>(
+			raw_dist, variant, move);
 
 		cost_type c = dp[idx(full, i)] + edge_cost;
 		if (c < best_cost) {
