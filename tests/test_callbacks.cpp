@@ -98,8 +98,8 @@ void test_protocol_nn_n1() {
 // ---------------------------------------------------------------------------
 
 struct RejectCity1 {
-	bool move_filter(std::span<const std::size_t>,
-	                 const AppendMove<std::size_t>& m) const {
+	template <typename CostT>
+	bool move_filter(const AppendMove<std::size_t, CostT>& m) const {
 		return m.city != 1;
 	}
 };
@@ -184,23 +184,24 @@ void test_custom_tour_cost_set_tour() {
 // ---------------------------------------------------------------------------
 
 struct FarthestSelector {
-	template <DistanceSource Dist>
-	auto select_next(const Dist& dist,
-	                 std::span<const typename dist_traits<Dist>::city_type> tour,
-	                 std::span<const uint8_t> visited) const
+	template <DistanceSource Dist, typename Variant>
+	auto select_next(const Solver<Dist, Variant>& solver) const
 		-> std::optional<typename dist_traits<Dist>::city_type>
 	{
 		using city_type = typename dist_traits<Dist>::city_type;
 		using cost_type = typename dist_traits<Dist>::cost_type;
-		const auto n = visited.size();
+
+		auto tour = solver.tour();
+		if (tour.empty()) return std::nullopt;
+
 		cost_type best_dist{};
 		city_type best_city{};
 		bool found = false;
 
-		for (std::size_t j = 0; j < n; ++j) {
-			if (visited[j]) continue;
+		for (std::size_t j = 0; j < solver.size(); ++j) {
 			auto c = static_cast<city_type>(j);
-			auto d = dist(tour.back(), c);
+			if (solver.is_visited(c)) continue;
+			auto d = solver.distance(tour.back(), c);
 			if (!found || d > best_dist) {
 				best_dist = d;
 				best_city = c;
@@ -281,8 +282,8 @@ void test_set_tour_empty() {
 
 struct DistancePlusBias {
 	// Adds a large bias to city 1, making it unattractive.
-	double move_eval(std::span<const std::size_t> tour,
-	                 const AppendMove<std::size_t>& m) const {
+	template <typename CostT>
+	double move_eval(const AppendMove<std::size_t, CostT>& m) const {
 		return m.city == 1 ? 9999.0 : 0.0;
 	}
 };
@@ -308,8 +309,8 @@ void test_move_eval_changes_selection() {
 // ---------------------------------------------------------------------------
 
 struct FractionalEval {
-	double move_eval(std::span<const std::size_t>,
-	                 const AppendMove<std::size_t>& m) const {
+	template <typename CostT>
+	double move_eval(const AppendMove<std::size_t, CostT>& m) const {
 		// Fractional scores that would be truncated to 0 if cast to int.
 		if (m.city == 1) return 0.3;
 		if (m.city == 2) return 0.1;  // best

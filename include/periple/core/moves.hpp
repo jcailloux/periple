@@ -1,20 +1,22 @@
 #pragma once
 
 #include <cstddef>
+#include <span>
 
 namespace periple {
 
-template <typename CityT>
+template <typename CityT, typename CostT>
 struct AppendMove {
 	CityT city;
+	std::span<const CityT> tour;  // partial tour before this append
+	CostT cost;                   // accumulated path cost before this append
 };
 
 template <typename CityT, typename CostT>
 struct DPMove {
 	CityT from;
 	CityT to;
-	CostT cost;          // cumulative DP cost at 'from' (after move_eval adjustments)
-	CostT distance;      // raw dist(from, to), before move_eval
+	CostT cost;          // accumulated DP cost before this transition
 	std::size_t set;     // visited cities bitmask (includes from, excludes to)
 };
 

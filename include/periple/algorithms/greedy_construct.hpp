@@ -5,37 +5,12 @@
 // Generic loop that builds a tour by appending one city at a time.
 // The Strategy decides which city to append next; the framework only
 // manages the tour buffer, visited flags, and termination.
-//
-// Variant callbacks are forwarded to the strategy's methods when they
-// accept a callbacks parameter (4-arg). Otherwise the 3-arg form is called.
 
 #include <periple/core/solver.hpp>
 
 #include <optional>
-#include <span>
 
 namespace periple {
-namespace detail {
-
-// Calls strategy.select_next with or without variant callbacks,
-// depending on what the strategy accepts.
-template <DistanceSource Dist, typename Strategy, typename Variant>
-auto call_select_next(
-	Strategy& strategy, const Dist& dist,
-	std::span<const typename dist_traits<Dist>::city_type> tour,
-	std::span<const uint8_t> visited,
-	const Variant& variant)
-{
-	if constexpr (requires {
-		strategy.select_next(dist, tour, visited, variant);
-	}) {
-		return strategy.select_next(dist, tour, visited, variant);
-	} else {
-		return strategy.select_next(dist, tour, visited);
-	}
-}
-
-} // namespace detail
 
 // ---------------------------------------------------------------------------
 // Solver::greedy_construct
@@ -49,7 +24,6 @@ auto Solver<Dist, Variant>::greedy_construct(
 {
 	assert(dist_ && "greedy_construct: no distance source set");
 	const auto total = dist_->size();
-	const auto& variant = variant_ref();
 
 	if (params.resume_at > 0) {
 		assert(params.resume_at <= n_
@@ -61,6 +35,7 @@ auto Solver<Dist, Variant>::greedy_construct(
 			visited_[static_cast<std::size_t>(tour_[i])] = 1;
 		n_ = k;
 		auto prefix = std::span<const city_type>(tour_.data(), k);
+		const auto& variant = variant_ref();
 		if constexpr (requires {
 			{ variant.on_truncate(*dist_, prefix) } -> std::convertible_to<cost_type>;
 		}) {
@@ -76,9 +51,7 @@ auto Solver<Dist, Variant>::greedy_construct(
 	}
 
 	while (n_ < total) {
-		auto partial = std::span<const city_type>(tour_.data(), n_);
-		auto vis = std::span<const uint8_t>(visited_.data(), total);
-		auto next = detail::call_select_next(strategy, *dist_, partial, vis, variant);
+		auto next = strategy.select_next(*this);
 		if (!next) break;
 		append(*next);
 	}

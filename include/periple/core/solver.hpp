@@ -74,7 +74,10 @@ public:
 	[[nodiscard]] auto tour()      const -> std::span<const city_type>;
 	[[nodiscard]] auto cost()      const -> cost_type;
 	[[nodiscard]] auto symmetric() const -> bool;
+	[[nodiscard]] auto is_visited(city_type city) const -> bool;
+	[[nodiscard]] auto distance(city_type i, city_type j) const -> cost_type;
 	void set_tour(std::span<const city_type> tour);
+	void set_tour(std::span<const city_type> tour, cost_type known_cost);
 	void set_symmetric(bool sym);
 	void set_symmetric(bool sym, unchecked_t);
 
@@ -89,10 +92,6 @@ public:
 	auto append(city_type city) -> Solver&;
 	[[nodiscard]] auto can_append(city_type city) const -> bool;
 
-	// --- Tour import with known cost ----------------------------------------
-
-	void set_tour(std::span<const city_type> tour, cost_type known_cost);
-
 	// --- Algorithms (defined inline in algorithms/*.hpp) --------------------
 
 	auto nearest_neighbor(NearestNeighborParams params = {}) -> Solver&;
@@ -102,6 +101,46 @@ public:
 	template <typename Strategy>
 	auto greedy_construct(Strategy strategy,
 	                      ConstructParams params = {}) -> Solver&;
+
+	// --- Generic variant dispatch -------------------------------------------
+
+	// Check if the variant's move_filter accepts these arguments.
+	// Returns true if the variant has no move_filter for this signature.
+	template <typename... Args>
+	[[nodiscard]] auto filter(Args&&... args) const -> bool {
+		if constexpr (requires {
+			{ variant_ref().move_filter(std::forward<Args>(args)...) }
+				-> std::convertible_to<bool>;
+		}) {
+			return variant_ref().move_filter(std::forward<Args>(args)...);
+		} else {
+			return true;
+		}
+	}
+
+	// Returns the variant's move_eval result, or raw_cost if not provided.
+	// The return type preserves the variant's move_eval return type when
+	// available, allowing scoring with higher precision than cost_type.
+	template <typename CostT, typename... Args>
+	[[nodiscard]] auto eval(CostT raw_cost, Args&&... args) const {
+		if constexpr (requires {
+			variant_ref().move_eval(std::forward<Args>(args)...);
+		}) {
+			return variant_ref().move_eval(std::forward<Args>(args)...);
+		} else {
+			return raw_cost;
+		}
+	}
+
+	// Calls the variant's on_move if provided. No-op otherwise.
+	template <typename... Args>
+	void notify(Args&&... args) const {
+		if constexpr (requires {
+			variant_ref().on_move(std::forward<Args>(args)...);
+		}) {
+			variant_ref().on_move(std::forward<Args>(args)...);
+		}
+	}
 
 #ifdef PERIPLE_TESTING
 	template <DistanceSource D, typename V> friend class SolverTestAccess;
@@ -123,7 +162,7 @@ private:
 			static constexpr NoCallbacks fallback{};
 			return fallback;
 		} else {
-			assert(variant_);
+			assert(variant_ && "variant_ref: no variant set on solver");
 			return *variant_;
 		}
 	}
@@ -227,6 +266,17 @@ void Solver<Dist, Variant>::set_symmetric(bool sym) {
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::set_symmetric(bool sym, unchecked_t) {
 	symmetric_ = sym;
+}
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::is_visited(city_type city) const -> bool {
+	return n_ > 0 && visited_[static_cast<std::size_t>(city)];
+}
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::distance(city_type i, city_type j) const -> cost_type {
+	assert(dist_ && "distance: no distance source set");
+	return (*dist_)(i, j);
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -387,8 +437,7 @@ auto Solver<Dist, Variant>::compute_tour_cost(std::span<const city_type> t)
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 	assert(dist_ && "append: no distance source set");
-	assert((status_ == SolutionStatus::none || status_ == SolutionStatus::partial)
-		&& "append: solver must be in none or partial state");
+	assert((status_ == SolutionStatus::none || status_ == SolutionStatus::partial) && "append: solver must be in none or partial state");
 	const auto total = dist_->size();
 	assert(static_cast<std::size_t>(city) < total && "append: city index out of bounds");
 	ensure_capacity(total);
@@ -396,19 +445,12 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 	if (n_ == 0)
 		std::fill_n(visited_.data(), total, uint8_t{0});
 
-	// Accumulate edge cost via inline dispatch.
+	// Accumulate edge cost via variant dispatch.
+	auto cost_before = cost_;
 	if (n_ > 0) {
-		auto t = std::span<const city_type>(tour_.data(), n_);
 		auto raw = (*dist_)(tour_[n_ - 1], city);
-		if constexpr (requires {
-			{ variant_ref().move_eval(t, AppendMove<city_type>{city}) }
-				-> std::convertible_to<cost_type>;
-		}) {
-			cost_ += static_cast<cost_type>(
-				variant_ref().move_eval(t, AppendMove<city_type>{city}));
-		} else {
-			cost_ += raw;
-		}
+		AppendMove<city_type, cost_type> move{city, {tour_.data(), n_}, cost_};
+		cost_ += static_cast<cost_type>(eval(raw, move));
 	}
 
 	// Place and mark visited.
@@ -416,16 +458,8 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 	visited_[static_cast<std::size_t>(city)] = 1;
 	++n_;
 
-	// Notify variant via inline dispatch.
-	if constexpr (requires {
-		variant_ref().on_move(
-			std::span<const city_type>(tour_.data(), n_),
-			AppendMove<city_type>{city});
-	}) {
-		variant_ref().on_move(
-			std::span<const city_type>(tour_.data(), n_),
-			AppendMove<city_type>{city});
-	}
+	// Notify variant (tour now includes the new city, cost is before this append).
+	notify(AppendMove<city_type, cost_type>{city, {tour_.data(), n_}, cost_before});
 
 	// Auto-finalize if tour is complete.
 	if (n_ == total) {
@@ -441,15 +475,7 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::can_append(city_type city) const -> bool {
-	auto t = std::span<const city_type>(tour_.data(), n_);
-	if constexpr (requires {
-		{ variant_ref().move_filter(t, AppendMove<city_type>{city}) }
-			-> std::convertible_to<bool>;
-	}) {
-		return variant_ref().move_filter(t, AppendMove<city_type>{city});
-	} else {
-		return true;
-	}
+	return filter(AppendMove<city_type, cost_type>{city, {tour_.data(), n_}, cost_});
 }
 
 template <DistanceSource Dist, typename Variant>

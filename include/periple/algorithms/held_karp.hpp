@@ -5,7 +5,6 @@
 // Bellman (1962), "Dynamic Programming Treatment of the Travelling Salesman Problem"
 // Held, Karp (1962), "A Dynamic Programming Approach to Sequencing Problems"
 
-#include <periple/core/dispatch.hpp>
 #include <periple/core/solver.hpp>
 
 #include <bit>
@@ -13,29 +12,37 @@
 #include <span>
 
 namespace periple {
-namespace detail {
 
 template <DistanceSource Dist, typename Variant>
-auto held_karp_solve(
-	const Dist& dist, std::size_t n,
-	std::span<typename dist_traits<Dist>::city_type> tour,
-	std::span<typename dist_traits<Dist>::cost_type> dp,
-	std::span<typename dist_traits<Dist>::city_type> parent,
-	const Variant& variant)
-	-> typename dist_traits<Dist>::cost_type
+auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
+	-> Solver&
 {
-	using cost_type = typename dist_traits<Dist>::cost_type;
-	using city_type = typename dist_traits<Dist>::city_type;
+	if (try_trivial()) {
+		status_ = SolutionStatus::optimal;
+		return *this;
+	}
+
 	using move_type = DPMove<city_type, cost_type>;
-
 	constexpr auto INF = std::numeric_limits<cost_type>::max();
-	const std::size_t num_sets = std::size_t{1} << n;
 
-	auto idx = [n](std::size_t S, std::size_t i) -> std::size_t {
-		return S * n + i;
+	n_ = dist_->size();
+	ensure_capacity(n_);
+
+	if (!hk_cache_) hk_cache_.emplace();
+
+	const std::size_t num_sets = std::size_t{1} << n_;
+	const std::size_t table_sz = num_sets * n_;
+	hk_cache_->dp.resize(table_sz);
+	hk_cache_->parent.resize(table_sz);
+
+	auto dp     = std::span<cost_type>(hk_cache_->dp.data(), table_sz);
+	auto parent = std::span<city_type>(hk_cache_->parent.data(), table_sz);
+
+	auto idx = [this](std::size_t S, std::size_t i) -> std::size_t {
+		return S * n_ + i;
 	};
 
-	std::fill_n(dp.begin(), num_sets * n, INF);
+	std::fill_n(dp.begin(), table_sz, INF);
 
 	// Base: start at city 0
 	dp[idx(1, 0)] = cost_type{};
@@ -52,14 +59,14 @@ auto held_karp_solve(
 			for (auto sj = ~S & complement_mask; sj; sj &= sj - 1) {
 				auto j = static_cast<std::size_t>(std::countr_zero(sj));
 				auto cj = static_cast<city_type>(j);
-				auto raw_dist = dist(ci, cj);
+				auto raw_dist = (*dist_)(ci, cj);
 
-				move_type move{ci, cj, dp[idx(S, i)], raw_dist, S};
+				move_type move{ci, cj, dp[idx(S, i)], S};
 
-				if (!dispatch_filter(variant, move)) continue;
+				if (!filter(move)) continue;
 
-				cost_type edge_cost = dispatch_eval<cost_type>(
-					raw_dist, variant, move);
+				cost_type edge_cost = static_cast<cost_type>(
+					eval(raw_dist, move));
 
 				std::size_t S_next = S | (std::size_t{1} << j);
 				cost_type new_cost = dp[idx(S, i)] + edge_cost;
@@ -67,7 +74,7 @@ auto held_karp_solve(
 					dp[idx(S_next, j)]     = new_cost;
 					parent[idx(S_next, j)] = ci;
 
-					dispatch_on_move(variant, move);
+					notify(move);
 				}
 			}
 		}
@@ -78,18 +85,18 @@ auto held_karp_solve(
 	cost_type best_cost = INF;
 	city_type best_last{};
 
-	for (std::size_t i = 1; i < n; ++i) {
+	for (std::size_t i = 1; i < n_; ++i) {
 		if (dp[idx(full, i)] == INF) continue;
 
 		auto ci = static_cast<city_type>(i);
-		auto raw_dist = dist(ci, city_type{0});
+		auto raw_dist = (*dist_)(ci, city_type{0});
 
-		move_type move{ci, city_type{0}, dp[idx(full, i)], raw_dist, full};
+		move_type move{ci, city_type{0}, dp[idx(full, i)], full};
 
-		if (!dispatch_filter(variant, move)) continue;
+		if (!filter(move)) continue;
 
-		cost_type edge_cost = dispatch_eval<cost_type>(
-			raw_dist, variant, move);
+		cost_type edge_cost = static_cast<cost_type>(
+			eval(raw_dist, move));
 
 		cost_type c = dp[idx(full, i)] + edge_cost;
 		if (c < best_cost) {
@@ -100,47 +107,16 @@ auto held_karp_solve(
 
 	// Backtrack
 	if (best_cost < INF) {
-		tour[n - 1] = best_last;
+		tour_[n_ - 1] = best_last;
 		std::size_t S = full;
-		for (std::size_t pos = n - 1; pos > 0; --pos) {
-			auto cur = static_cast<std::size_t>(tour[pos]);
-			tour[pos - 1] = parent[idx(S, cur)];
+		for (std::size_t pos = n_ - 1; pos > 0; --pos) {
+			auto cur = static_cast<std::size_t>(tour_[pos]);
+			tour_[pos - 1] = parent[idx(S, cur)];
 			S ^= (std::size_t{1} << cur);
 		}
 	}
 
-	return best_cost;
-}
-
-} // namespace detail
-
-template <DistanceSource Dist, typename Variant>
-auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
-	-> Solver&
-{
-	if (try_trivial()) {
-		status_ = SolutionStatus::optimal;
-		return *this;
-	}
-
-	n_ = dist_->size();
-	ensure_capacity(n_);
-
-	if (!hk_cache_) hk_cache_.emplace();
-
-	const std::size_t num_sets = std::size_t{1} << n_;
-	const std::size_t table_sz = num_sets * n_;
-	hk_cache_->dp.resize(table_sz);
-	hk_cache_->parent.resize(table_sz);
-
-	auto best_cost = detail::held_karp_solve(
-		*dist_, n_,
-		std::span<city_type>(tour_.data(), n_),
-		std::span<cost_type>(hk_cache_->dp.data(), table_sz),
-		std::span<city_type>(hk_cache_->parent.data(), table_sz),
-		variant_ref());
-
-	if (best_cost == std::numeric_limits<cost_type>::max()) {
+	if (best_cost == INF) {
 		n_ = 0;
 		cost_ = {};
 		status_ = SolutionStatus::infeasible;

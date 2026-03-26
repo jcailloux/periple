@@ -139,23 +139,19 @@ struct Strict {
 
 	// --- Constructive callbacks (AppendMove) ---
 
-	bool move_filter(std::span<const city_type> tour,
-	                 const AppendMove<city_type>& m) const
-	{
-		assert(!tour.empty());
-		auto arrival = next_arrival(tour, tour.size() - 1, m.city);
+	bool move_filter(const AppendMove<city_type, cost_type>& m) const {
+		assert(!m.tour.empty() && "move_filter: AppendMove tour must not be empty");
+		auto arrival = next_arrival(m.tour, m.tour.size() - 1, m.city);
 		return detail::is_feasible(windows_of(m.city), arrival);
 	}
 
-	void on_move(std::span<const city_type> tour,
-	             const AppendMove<city_type>& m) const
-	{
-		auto pos = tour.size() - 1;
+	void on_move(const AppendMove<city_type, cost_type>& m) const {
+		auto pos = m.tour.size() - 1;
 		if (pos == 0) {
 			arrival_times_[0] = cost_type{};
 		} else {
 			arrival_times_[pos] = static_cast<cost_type>(
-				next_arrival(tour, pos - 1, m.city));
+				next_arrival(m.tour, pos - 1, m.city));
 		}
 	}
 
@@ -194,7 +190,7 @@ private:
 	double dp_arrival_at(const DPMove<city_type, cost_type>& m) const {
 		double arr = dp_arrival_[m.set * n_ + static_cast<std::size_t>(m.from)];
 		double depart = detail::departure_time(windows_of(m.from), arr);
-		return depart + static_cast<double>(m.distance);
+		return depart + static_cast<double>((*dist_)(m.from, m.to));
 	}
 
 	void ensure_dp_arrival() const {
@@ -223,7 +219,8 @@ struct Relaxed {
 	// Single window per city.
 	Relaxed(const Dist& dist, std::span<const TimeWindow> windows,
 	        cost_type penalty_weight = 1000)
-		: n_(dist.size())
+		: dist_(&dist)
+		, n_(dist.size())
 		, store_(windows)
 		, penalty_weight_(penalty_weight)
 	{
@@ -233,7 +230,8 @@ struct Relaxed {
 	// Multiple windows per city.
 	Relaxed(const Dist& dist, std::span<const std::vector<TimeWindow>> windows,
 	        cost_type penalty_weight = 1000)
-		: n_(dist.size())
+		: dist_(&dist)
+		, n_(dist.size())
 		, store_(windows)
 		, penalty_weight_(penalty_weight)
 	{
@@ -273,10 +271,11 @@ struct Relaxed {
 		ensure_dp_arrival();
 		double arr_to = dp_arrival_at(m);
 		double violation = detail::violation_amount(windows_of(m.to), arr_to);
+		auto raw = (*dist_)(m.from, m.to);
 		if (violation > 0.0)
-			return m.distance + static_cast<cost_type>(
+			return raw + static_cast<cost_type>(
 				static_cast<double>(penalty_weight_) * violation);
-		return m.distance;
+		return raw;
 	}
 
 	void on_move(const DPMove<city_type, cost_type>& m) const {
@@ -295,7 +294,7 @@ private:
 	double dp_arrival_at(const DPMove<city_type, cost_type>& m) const {
 		double arr = dp_arrival_[m.set * n_ + static_cast<std::size_t>(m.from)];
 		double depart = detail::departure_time(windows_of(m.from), arr);
-		return depart + static_cast<double>(m.distance);
+		return depart + static_cast<double>((*dist_)(m.from, m.to));
 	}
 
 	void ensure_dp_arrival() const {
@@ -304,6 +303,7 @@ private:
 		dp_arrival_[1 * n_ + 0] = 0.0;
 	}
 
+	const Dist* dist_;
 	std::size_t n_;
 	detail::WindowStore store_;
 	cost_type penalty_weight_;
