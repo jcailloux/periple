@@ -21,7 +21,6 @@ struct NearestSelector {
 		-> std::optional<typename dist_traits<Dist>::city_type>
 	{
 		using city_type = typename dist_traits<Dist>::city_type;
-		using cost_type = typename dist_traits<Dist>::cost_type;
 		using score_type = decltype(score(solver, city_type{}));
 
 		auto tour = solver.tour();

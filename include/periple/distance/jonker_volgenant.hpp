@@ -31,7 +31,7 @@ public:
 
 	JonkerVolgenantView(const Dist& dist, cost_type big_m)
 		: dist_(&dist), n_(dist.size()), big_m_(big_m) {
-		assert(n_ >= 2);
+		assert(n_ >= 2 && "JonkerVolgenantView: requires at least 2 cities");
 	}
 
 	[[nodiscard]] cost_type operator()(city_type ci, city_type cj) const {
@@ -72,9 +72,9 @@ public:
 	// Exploits real-ghost alternation: stride-2 read, zero branches in loop.
 	void atsp_tour(std::span<const city_type> sym,
 	               std::span<city_type> out) const {
-		assert(sym.size() == 2 * n_);
-		assert(out.size() >= n_);
-		assert(verify_alternation(sym));
+		assert(sym.size() == 2 * n_ && "atsp_tour: symmetric tour must have 2n cities");
+		assert(out.size() >= n_ && "atsp_tour: output buffer must hold at least n cities");
+		assert(verify_alternation(sym) && "atsp_tour: tour must alternate real and ghost cities");
 
 		std::size_t start = static_cast<std::size_t>(sym[0]) >= n_ ? 1 : 0;
 		for (std::size_t i = 0; i < n_; ++i)
@@ -92,8 +92,8 @@ public:
 	// Each city is followed by its ghost: [c, c+n, c', c'+n, ...].
 	void symmetric_tour(std::span<const city_type> atsp,
 	                    std::span<city_type> out) const {
-		assert(atsp.size() == n_);
-		assert(out.size() >= 2 * n_);
+		assert(atsp.size() == n_ && "symmetric_tour: ATSP tour must have n cities");
+		assert(out.size() >= 2 * n_ && "symmetric_tour: output buffer must hold at least 2n cities");
 
 		for (std::size_t i = 0; i < n_; ++i) {
 			out[2 * i]     = atsp[i];
@@ -144,7 +144,7 @@ auto jonker_volgenant(const Dist& dist) -> JonkerVolgenantView<Dist> {
 	using cost_type = typename dist_traits<Dist>::cost_type;
 	using city_type = typename dist_traits<Dist>::city_type;
 	const auto n = dist.size();
-	assert(n >= 2);
+	assert(n >= 2 && "jonker_volgenant: requires at least 2 cities");
 	cost_type max_cost{};
 	for (std::size_t i = 0; i < n; ++i)
 		for (std::size_t j = 0; j < n; ++j)

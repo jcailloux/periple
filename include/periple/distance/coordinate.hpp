@@ -3,6 +3,7 @@
 #include <periple/core/traits.hpp>
 
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <tuple>
 #include <type_traits>
@@ -39,7 +40,10 @@ public:
 		: n_(coords.size() / dim), dim_(dim)
 		, coords_(std::move(coords))
 		, dist_fn_(std::move(dist_fn))
-	{}
+	{
+		assert(dim > 0 && "CoordinateDistance: dimension must be positive");
+		assert(coords_.size() % dim == 0 && "CoordinateDistance: coords size must be a multiple of dimension");
+	}
 
 	// vector<pair<double, double>> -- 2D points
 	CoordinateDistance(
@@ -139,9 +143,11 @@ private:
 		if (pts.empty()) return {};
 		std::size_t dim = pts[0].size();
 		std::vector<double> flat(pts.size() * dim);
-		for (std::size_t i = 0; i < pts.size(); ++i)
+		for (std::size_t i = 0; i < pts.size(); ++i) {
+			assert(pts[i].size() == dim && "CoordinateDistance: all points must have the same dimension");
 			for (std::size_t k = 0; k < dim; ++k)
 				flat[i * dim + k] = pts[i][k];
+		}
 		return flat;
 	}
 

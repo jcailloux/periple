@@ -281,9 +281,9 @@ auto Solver<Dist, Variant>::distance(city_type i, city_type j) const -> cost_typ
 
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
-	assert(dist_);
+	assert(dist_ && "set_tour: no distance source set");
 	const auto total = dist_->size();
-	assert(t.size() <= total);
+	assert(t.size() <= total && "set_tour: tour exceeds matrix size");
 
 	// Debug validation: no duplicates, cities within bounds.
 	assert([&] {
@@ -293,7 +293,7 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 				if (t[i] == t[j]) return false;
 		}
 		return true;
-	}());
+	}() && "set_tour: invalid tour (duplicate or out-of-bounds city)");
 
 	ensure_capacity(total);
 	n_ = t.size();
@@ -373,14 +373,11 @@ void Solver<Dist, Variant>::check_symmetry() const {
 }
 
 template <DistanceSource Dist, typename Variant>
-auto Solver<Dist, Variant>::neighbors(city_type city, std::size_t k)
-	-> std::span<const city_type>
-{
-	assert(dist_);
-	assert(k < dist_->size());
+auto Solver<Dist, Variant>::neighbors(city_type city, std::size_t k) -> std::span<const city_type> {
+	assert(dist_ && "neighbors: no distance source set");
+	assert(k < dist_->size() && "neighbors: k must be less than number of cities");
 	ensure_neighbors(k);
-	return {neighbors_.data() +
-		static_cast<std::size_t>(city) * neighbors_k_, k};
+	return {neighbors_.data() + static_cast<std::size_t>(city) * neighbors_k_, k};
 }
 
 template <DistanceSource Dist, typename Variant>

@@ -552,6 +552,52 @@ void test_tsptw_strict_multi_window_reject() {
 }
 
 // ---------------------------------------------------------------------------
+// Functional: TSPTW optional windows (some cities unconstrained)
+// ---------------------------------------------------------------------------
+
+void test_tsptw_strict_optional_windows() {
+	auto mat = make_mat4();
+
+	// City 1 has a tight window, others are unconstrained.
+	std::optional<tsptw::TimeWindow> windows[] = {
+		std::nullopt,          // city 0: unconstrained
+		tsptw::TimeWindow{0, 1},  // city 1: too tight
+		std::nullopt,          // city 2: unconstrained
+		std::nullopt,          // city 3: unconstrained
+	};
+
+	tsptw::Strict tw(mat, windows);
+	Solver solver(mat, tw);
+	solver.nearest_neighbor();
+
+	// City 1 is rejected (same as test_tsptw_strict_nn).
+	assert(solver.status() == SolutionStatus::partial);
+	assert(solver.tour().size() == 3);
+	for (auto c : solver.tour())
+		assert(c != 1);
+}
+
+void test_tsptw_relaxed_optional_windows() {
+	auto mat = make_mat4();
+
+	std::optional<tsptw::TimeWindow> windows[] = {
+		std::nullopt,              // city 0: unconstrained
+		std::nullopt,              // city 1: unconstrained
+		tsptw::TimeWindow{0, 5},   // city 2: tight
+		std::nullopt,              // city 3: unconstrained
+	};
+
+	tsptw::Relaxed relaxed(mat, windows, 1000);
+	Solver solver(mat, relaxed);
+	solver.nearest_neighbor();
+
+	// Full tour, cost includes penalties for city 2.
+	assert(solver.status() == SolutionStatus::feasible);
+	auto expected = relaxed.tour_cost(mat, solver.tour());
+	assert(solver.cost() == expected);
+}
+
+// ---------------------------------------------------------------------------
 // Unit: neighbor lists
 // ---------------------------------------------------------------------------
 
@@ -643,6 +689,8 @@ int main() {
 		{"tsptw_strict_multi_window_reject", test_tsptw_strict_multi_window_reject},
 		{"tsptw_relaxed_nn",             test_tsptw_relaxed_nn},
 		{"tsptw_relaxed_hk",             test_tsptw_relaxed_hk},
+		{"tsptw_strict_optional_windows", test_tsptw_strict_optional_windows},
+		{"tsptw_relaxed_optional_windows", test_tsptw_relaxed_optional_windows},
 		// Unit - neighbor lists
 		{"neighbors_basic",              test_neighbors_basic},
 		{"neighbors_grow",               test_neighbors_grow},

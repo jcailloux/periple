@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <numeric>
+#include <optional>
 #include <vector>
 
 using namespace periple;
@@ -162,6 +163,46 @@ void run_relaxed(const Dist& dist) {
 }
 
 // ---------------------------------------------------------------------------
+// TSPTW Strict with optional windows x all algorithms
+// ---------------------------------------------------------------------------
+
+template <DistanceSource Dist>
+void run_strict_optional(const Dist& dist) {
+	const auto n = dist.size();
+	// City 0 has a generous window, others are unconstrained.
+	std::vector<std::optional<tsptw::TimeWindow>> windows(n, std::nullopt);
+	if (n > 0) windows[0] = tsptw::TimeWindow{0.0, 500.0};
+
+	for_each_algorithm(nullptr, [&](const auto& algo) {
+		tsptw::Strict tw(dist, std::span(windows));
+		Solver solver(dist, tw);
+		algo(solver);
+
+		// All cities unconstrained except city 0 with generous window.
+		// Should always find a full tour.
+		assert_valid_tour(dist, solver.tour());
+	});
+}
+
+template <DistanceSource Dist>
+void run_relaxed_optional(const Dist& dist) {
+	const auto n = dist.size();
+	// City 1 has a tight window, others unconstrained.
+	std::vector<std::optional<tsptw::TimeWindow>> windows(n, std::nullopt);
+	if (n > 1) windows[1] = tsptw::TimeWindow{0.0, 5.0};
+
+	for_each_algorithm(nullptr, [&](const auto& algo) {
+		tsptw::Relaxed relaxed(dist, std::span(windows), 1000);
+		Solver solver(dist, relaxed);
+		algo(solver);
+
+		assert_valid_tour(dist, solver.tour());
+		auto expected = relaxed.tour_cost(dist, solver.tour());
+		assert(solver.cost() == expected);
+	});
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -194,5 +235,15 @@ int main() {
 	std::printf("tsptw_relaxed_asym4 ... ");
 	std::fflush(stdout);
 	run_relaxed(make_asym4());
+	std::printf("OK\n");
+
+	std::printf("tsptw_strict_optional_sym4 ... ");
+	std::fflush(stdout);
+	run_strict_optional(make_sym4());
+	std::printf("OK\n");
+
+	std::printf("tsptw_relaxed_optional_sym4 ... ");
+	std::fflush(stdout);
+	run_relaxed_optional(make_sym4());
 	std::printf("OK\n");
 }

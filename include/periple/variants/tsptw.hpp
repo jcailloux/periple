@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cassert>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -35,6 +36,20 @@ public:
 		offsets_.resize(windows.size() + 1);
 		for (std::size_t i = 0; i <= windows.size(); ++i)
 			offsets_[i] = i;
+	}
+
+	// Optional window per city (nullopt = unconstrained).
+	explicit WindowStore(std::span<const std::optional<TimeWindow>> windows) {
+		offsets_.resize(windows.size() + 1);
+		std::size_t pos = 0;
+		for (std::size_t i = 0; i < windows.size(); ++i) {
+			offsets_[i] = pos;
+			if (windows[i]) {
+				windows_.push_back(*windows[i]);
+				++pos;
+			}
+		}
+		offsets_[windows.size()] = pos;
 	}
 
 	// Multiple windows per city (sorted by earliest internally).
@@ -124,7 +139,17 @@ struct Strict {
 		, store_(windows)
 		, arrival_times_(dist.size(), cost_type{})
 	{
-		assert(windows.size() == dist.size());
+		assert(windows.size() == dist.size() && "tsptw::Strict: must provide one window per city");
+	}
+
+	// Optional window per city (nullopt = unconstrained).
+	Strict(const Dist& dist, std::span<const std::optional<TimeWindow>> windows)
+		: dist_(&dist)
+		, n_(dist.size())
+		, store_(windows)
+		, arrival_times_(dist.size(), cost_type{})
+	{
+		assert(windows.size() == dist.size() && "tsptw::Strict: must provide one optional window per city");
 	}
 
 	// Multiple windows per city.
@@ -134,7 +159,7 @@ struct Strict {
 		, store_(windows)
 		, arrival_times_(dist.size(), cost_type{})
 	{
-		assert(windows.size() == dist.size());
+		assert(windows.size() == dist.size() && "tsptw::Strict: must provide one window vector per city");
 	}
 
 	// --- Constructive callbacks (AppendMove) ---
@@ -224,7 +249,18 @@ struct Relaxed {
 		, store_(windows)
 		, penalty_weight_(penalty_weight)
 	{
-		assert(windows.size() == dist.size());
+		assert(windows.size() == dist.size() && "tsptw::Relaxed: must provide one window per city");
+	}
+
+	// Optional window per city (nullopt = unconstrained).
+	Relaxed(const Dist& dist, std::span<const std::optional<TimeWindow>> windows,
+	        cost_type penalty_weight = 1000)
+		: dist_(&dist)
+		, n_(dist.size())
+		, store_(windows)
+		, penalty_weight_(penalty_weight)
+	{
+		assert(windows.size() == dist.size() && "tsptw::Relaxed: must provide one optional window per city");
 	}
 
 	// Multiple windows per city.
@@ -235,7 +271,7 @@ struct Relaxed {
 		, store_(windows)
 		, penalty_weight_(penalty_weight)
 	{
-		assert(windows.size() == dist.size());
+		assert(windows.size() == dist.size() && "tsptw::Relaxed: must provide one window vector per city");
 	}
 
 	// --- tour_cost: distance + penalty for late arrivals ---

@@ -26,6 +26,7 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
 	constexpr auto INF = std::numeric_limits<cost_type>::max();
 
 	n_ = dist_->size();
+	assert(n_ <= 25 && "held_karp: instance too large (exponential memory/time, max 25 cities)");
 	ensure_capacity(n_);
 
 	if (!hk_cache_) hk_cache_.emplace();
