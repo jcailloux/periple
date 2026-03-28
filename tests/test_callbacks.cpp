@@ -1,5 +1,5 @@
 #include <periple/periple.hpp>
-#include <periple/variants/tsptw.hpp>
+#include <periple/variants/time_windows.hpp>
 #include <logging_callbacks.hpp>
 
 #include <cassert>
@@ -408,14 +408,14 @@ void test_tsptw_strict_nn() {
 
 	// City 1 has a very tight window: latest=1.
 	// dist(0,1)=10 > 1, so 0->1 is always rejected.
-	tsptw::TimeWindow windows[] = {
+	time_windows::TimeWindow windows[] = {
 		{0, 100},  // city 0
 		{0,   1},  // city 1: too tight for any direct visit
 		{0, 100},  // city 2
 		{0, 100},  // city 3
 	};
 
-	tsptw::Strict tw(mat, windows);
+	time_windows::Strict tw(mat, windows);
 	Solver solver(mat, tw);
 	solver.nearest_neighbor();
 
@@ -438,14 +438,14 @@ void test_tsptw_relaxed_nn() {
 	auto mat = make_mat4();
 
 	// City 2 has a tight window.
-	tsptw::TimeWindow windows[] = {
+	time_windows::TimeWindow windows[] = {
 		{0, 100},  // city 0
 		{0, 100},  // city 1
 		{0,   5},  // city 2: tight
 		{0, 100},  // city 3
 	};
 
-	tsptw::Relaxed relaxed(mat, windows, 1000);
+	time_windows::Relaxed relaxed(mat, windows, 1000);
 	Solver solver(mat, relaxed);
 	solver.nearest_neighbor();
 
@@ -464,14 +464,14 @@ void test_tsptw_relaxed_nn() {
 void test_tsptw_relaxed_hk() {
 	auto mat = make_mat4();
 
-	tsptw::TimeWindow windows[] = {
+	time_windows::TimeWindow windows[] = {
 		{0, 100},
 		{0, 100},
 		{0,   5},
 		{0, 100},
 	};
 
-	tsptw::Relaxed relaxed(mat, windows, 1000);
+	time_windows::Relaxed relaxed(mat, windows, 1000);
 	Solver solver(mat, relaxed);
 	solver.held_karp();
 
@@ -501,13 +501,13 @@ void test_tsptw_strict_multi_window() {
 		{3, 4, 0}
 	});
 
-	std::vector<std::vector<tsptw::TimeWindow>> windows = {
+	std::vector<std::vector<time_windows::TimeWindow>> windows = {
 		{{0, 100}},            // city 0: always open
 		{{0, 2}, {8, 20}},     // city 1: closed 2-8
 		{{0, 100}},            // city 2: always open
 	};
 
-	tsptw::Strict tw(mat, windows);
+	time_windows::Strict tw(mat, windows);
 	Solver solver(mat, tw);
 	solver.nearest_neighbor();
 
@@ -536,13 +536,13 @@ void test_tsptw_strict_multi_window_reject() {
 		{3, 4, 0}
 	});
 
-	std::vector<std::vector<tsptw::TimeWindow>> windows = {
+	std::vector<std::vector<time_windows::TimeWindow>> windows = {
 		{{0, 100}},            // city 0
 		{{0, 2}, {4, 6}},      // city 1: both windows too early for dist=10
 		{{0, 100}},            // city 2
 	};
 
-	tsptw::Strict tw(mat, windows);
+	time_windows::Strict tw(mat, windows);
 	Solver solver(mat, tw);
 	solver.nearest_neighbor();
 
@@ -559,14 +559,14 @@ void test_tsptw_strict_optional_windows() {
 	auto mat = make_mat4();
 
 	// City 1 has a tight window, others are unconstrained.
-	std::optional<tsptw::TimeWindow> windows[] = {
+	std::optional<time_windows::TimeWindow> windows[] = {
 		std::nullopt,          // city 0: unconstrained
-		tsptw::TimeWindow{0, 1},  // city 1: too tight
+		time_windows::TimeWindow{0, 1},  // city 1: too tight
 		std::nullopt,          // city 2: unconstrained
 		std::nullopt,          // city 3: unconstrained
 	};
 
-	tsptw::Strict tw(mat, windows);
+	time_windows::Strict tw(mat, windows);
 	Solver solver(mat, tw);
 	solver.nearest_neighbor();
 
@@ -580,14 +580,14 @@ void test_tsptw_strict_optional_windows() {
 void test_tsptw_relaxed_optional_windows() {
 	auto mat = make_mat4();
 
-	std::optional<tsptw::TimeWindow> windows[] = {
+	std::optional<time_windows::TimeWindow> windows[] = {
 		std::nullopt,              // city 0: unconstrained
 		std::nullopt,              // city 1: unconstrained
-		tsptw::TimeWindow{0, 5},   // city 2: tight
+		time_windows::TimeWindow{0, 5},   // city 2: tight
 		std::nullopt,              // city 3: unconstrained
 	};
 
-	tsptw::Relaxed relaxed(mat, windows, 1000);
+	time_windows::Relaxed relaxed(mat, windows, 1000);
 	Solver solver(mat, relaxed);
 	solver.nearest_neighbor();
 

@@ -1,6 +1,6 @@
 #include <periple/algorithms/registry.hpp>
 #include <periple/distance/matrix.hpp>
-#include <periple/variants/tsptw.hpp>
+#include <periple/variants/time_windows.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -67,13 +67,12 @@ template <DistanceSource Dist>
 bool tour_respects_windows(
 	const Dist& dist,
 	std::span<const typename dist_traits<Dist>::city_type> tour,
-	std::span<const tsptw::TimeWindow> windows)
+	std::span<const time_windows::TimeWindow> windows)
 {
 	double time = 0.0;
 	for (std::size_t i = 0; i < tour.size(); ++i) {
 		auto ci = static_cast<std::size_t>(tour[i]);
-		if (!tsptw::detail::is_feasible(
-				std::span<const tsptw::TimeWindow>(&windows[ci], 1), time))
+		if (!time_windows::detail::is_feasible(std::span<const time_windows::TimeWindow>(&windows[ci], 1), time))
 			return false;
 		time = std::max(time, windows[ci].earliest);
 		auto next = tour[(i + 1) % tour.size()];
@@ -87,10 +86,8 @@ bool tour_respects_windows(
 // ---------------------------------------------------------------------------
 
 template <typename Algo, DistanceSource Dist>
-void test_strict(const Algo& algo, const Dist& dist,
-                 std::span<const tsptw::TimeWindow> windows)
-{
-	tsptw::Strict tw(dist, windows);
+void test_strict(const Algo& algo, const Dist& dist, std::span<const time_windows::TimeWindow> windows) {
+	time_windows::Strict tw(dist, windows);
 	Solver solver(dist, tw);
 	algo(solver);
 
@@ -116,7 +113,7 @@ void run_strict(const Dist& dist) {
 	const auto n = dist.size();
 	// Generous windows: city i has window [0, 200 + 50*i].
 	// All tours should be feasible.
-	std::vector<tsptw::TimeWindow> windows(n);
+	std::vector<time_windows::TimeWindow> windows(n);
 	for (std::size_t i = 0; i < n; ++i)
 		windows[i] = {0.0, 200.0 + 50.0 * static_cast<double>(i)};
 
@@ -130,11 +127,8 @@ void run_strict(const Dist& dist) {
 // ---------------------------------------------------------------------------
 
 template <typename Algo, DistanceSource Dist>
-void test_relaxed(const Algo& algo, const Dist& dist,
-                  std::span<const tsptw::TimeWindow> windows,
-                  int penalty_weight)
-{
-	tsptw::Relaxed relaxed(dist, windows, penalty_weight);
+void test_relaxed(const Algo& algo, const Dist& dist, std::span<const time_windows::TimeWindow> windows, int penalty_weight) {
+	time_windows::Relaxed relaxed(dist, windows, penalty_weight);
 
 	// Test with variant on Solver.
 	{
@@ -151,7 +145,7 @@ template <DistanceSource Dist>
 void run_relaxed(const Dist& dist) {
 	const auto n = dist.size();
 	// Tight window on city 1 to trigger penalties.
-	std::vector<tsptw::TimeWindow> windows(n);
+	std::vector<time_windows::TimeWindow> windows(n);
 	for (std::size_t i = 0; i < n; ++i)
 		windows[i] = {0.0, 100.0};
 	if (n > 1)
@@ -170,11 +164,11 @@ template <DistanceSource Dist>
 void run_strict_optional(const Dist& dist) {
 	const auto n = dist.size();
 	// City 0 has a generous window, others are unconstrained.
-	std::vector<std::optional<tsptw::TimeWindow>> windows(n, std::nullopt);
-	if (n > 0) windows[0] = tsptw::TimeWindow{0.0, 500.0};
+	std::vector<std::optional<time_windows::TimeWindow>> windows(n, std::nullopt);
+	if (n > 0) windows[0] = time_windows::TimeWindow{0.0, 500.0};
 
 	for_each_algorithm(nullptr, [&](const auto& algo) {
-		tsptw::Strict tw(dist, std::span(windows));
+		time_windows::Strict tw(dist, std::span(windows));
 		Solver solver(dist, tw);
 		algo(solver);
 
@@ -188,11 +182,11 @@ template <DistanceSource Dist>
 void run_relaxed_optional(const Dist& dist) {
 	const auto n = dist.size();
 	// City 1 has a tight window, others unconstrained.
-	std::vector<std::optional<tsptw::TimeWindow>> windows(n, std::nullopt);
-	if (n > 1) windows[1] = tsptw::TimeWindow{0.0, 5.0};
+	std::vector<std::optional<time_windows::TimeWindow>> windows(n, std::nullopt);
+	if (n > 1) windows[1] = time_windows::TimeWindow{0.0, 5.0};
 
 	for_each_algorithm(nullptr, [&](const auto& algo) {
-		tsptw::Relaxed relaxed(dist, std::span(windows), 1000);
+		time_windows::Relaxed relaxed(dist, std::span(windows), 1000);
 		Solver solver(dist, relaxed);
 		algo(solver);
 

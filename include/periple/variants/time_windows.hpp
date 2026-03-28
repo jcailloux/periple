@@ -14,7 +14,7 @@
 #include <span>
 #include <vector>
 
-namespace periple::tsptw {
+namespace periple::time_windows {
 
 struct TimeWindow {
 	double earliest;
@@ -139,7 +139,7 @@ struct Strict {
 		, store_(windows)
 		, arrival_times_(dist.size(), cost_type{})
 	{
-		assert(windows.size() == dist.size() && "tsptw::Strict: must provide one window per city");
+		assert(windows.size() == dist.size() && "time_windows::Strict: must provide one window per city");
 	}
 
 	// Optional window per city (nullopt = unconstrained).
@@ -149,7 +149,7 @@ struct Strict {
 		, store_(windows)
 		, arrival_times_(dist.size(), cost_type{})
 	{
-		assert(windows.size() == dist.size() && "tsptw::Strict: must provide one optional window per city");
+		assert(windows.size() == dist.size() && "time_windows::Strict: must provide one optional window per city");
 	}
 
 	// Multiple windows per city.
@@ -159,7 +159,7 @@ struct Strict {
 		, store_(windows)
 		, arrival_times_(dist.size(), cost_type{})
 	{
-		assert(windows.size() == dist.size() && "tsptw::Strict: must provide one window vector per city");
+		assert(windows.size() == dist.size() && "time_windows::Strict: must provide one window vector per city");
 	}
 
 	// --- Constructive callbacks (AppendMove) ---
@@ -249,7 +249,7 @@ struct Relaxed {
 		, store_(windows)
 		, penalty_weight_(penalty_weight)
 	{
-		assert(windows.size() == dist.size() && "tsptw::Relaxed: must provide one window per city");
+		assert(windows.size() == dist.size() && "time_windows::Relaxed: must provide one window per city");
 	}
 
 	// Optional window per city (nullopt = unconstrained).
@@ -260,7 +260,7 @@ struct Relaxed {
 		, store_(windows)
 		, penalty_weight_(penalty_weight)
 	{
-		assert(windows.size() == dist.size() && "tsptw::Relaxed: must provide one optional window per city");
+		assert(windows.size() == dist.size() && "time_windows::Relaxed: must provide one optional window per city");
 	}
 
 	// Multiple windows per city.
@@ -271,7 +271,7 @@ struct Relaxed {
 		, store_(windows)
 		, penalty_weight_(penalty_weight)
 	{
-		assert(windows.size() == dist.size() && "tsptw::Relaxed: must provide one window vector per city");
+		assert(windows.size() == dist.size() && "time_windows::Relaxed: must provide one window vector per city");
 	}
 
 	// --- tour_cost: distance + penalty for late arrivals ---
@@ -346,4 +346,4 @@ private:
 	mutable std::vector<double> dp_arrival_;  // DP: indexed by set*n + city
 };
 
-} // namespace periple::tsptw
+} // namespace periple::time_windows

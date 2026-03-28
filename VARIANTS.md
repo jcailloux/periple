@@ -9,7 +9,7 @@ Each variant provides two modes:
 ## TSPTW: Time Windows
 
 ```cpp
-#include <periple/variants/tsptw.hpp>
+#include <periple/variants/time_windows.hpp>
 ```
 
 Each city has one or more time windows `{earliest, latest}`. A vehicle arriving before `earliest` waits; arriving after `latest` is a violation.
@@ -17,7 +17,7 @@ Each city has one or more time windows `{earliest, latest}`. A vehicle arriving 
 ### TimeWindow
 
 ```cpp
-periple::tsptw::TimeWindow windows[] = {
+periple::time_windows::TimeWindow windows[] = {
     {0, 100},   // city 0: depot, no constraint
     {0,  50},   // city 1: must arrive by time 50
     {10, 80},   // city 2: service between 10 and 80
@@ -27,7 +27,7 @@ periple::tsptw::TimeWindow windows[] = {
 For cities with multiple windows (e.g., a shop closed at noon):
 
 ```cpp
-std::vector<std::vector<periple::tsptw::TimeWindow>> windows = {
+std::vector<std::vector<periple::time_windows::TimeWindow>> windows = {
     {{0, 100}},            // city 0: always open
     {{8, 12}, {14, 18}},   // city 1: closed 12-14
     {{0, 100}},            // city 2: always open
@@ -41,7 +41,7 @@ Windows are sorted internally by `earliest`. An arrival between two windows wait
 Rejects infeasible moves via `move_filter`. Maintains an arrival time cache via `on_commit`.
 
 ```cpp
-periple::tsptw::Strict tw(matrix, windows);
+periple::time_windows::Strict tw(matrix, windows);
 periple::Solver solver(matrix);
 solver.nearest_neighbor({}, tw);
 ```
@@ -55,7 +55,7 @@ Strict uses `move_filter` and `on_commit` for `AppendMove`. It does not define `
 Penalizes time window violations in the tour cost. No move rejection.
 
 ```cpp
-periple::tsptw::Relaxed tw(matrix, windows, /*penalty_weight=*/1000);
+periple::time_windows::Relaxed tw(matrix, windows, /*penalty_weight=*/1000);
 periple::Solver solver(matrix, tw);     // tour_cost includes penalties
 solver.nearest_neighbor();              // selection uses distance (no per-move callbacks)
 ```
@@ -77,8 +77,8 @@ The default of 1000 is reasonable for typical TSPLIB-scale instances. Too low an
 Strict and Relaxed address different use cases. They can also be combined: use Strict as per-move callbacks to reject clearly infeasible moves, and Relaxed as `tour_cost` to penalize borderline violations in the reported cost. This requires two separate instances since they serve different roles.
 
 ```cpp
-periple::tsptw::Strict strict_tw(matrix, windows);
-periple::tsptw::Relaxed relaxed_tw(matrix, windows, 1000);
+periple::time_windows::Strict strict_tw(matrix, windows);
+periple::time_windows::Relaxed relaxed_tw(matrix, windows, 1000);
 periple::Solver solver(matrix, relaxed_tw);     // tour_cost with penalties
 solver.nearest_neighbor({}, strict_tw);          // move_filter rejects infeasible
 ```

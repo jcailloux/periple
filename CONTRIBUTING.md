@@ -87,7 +87,7 @@ struct TwoOptMove { std::size_t i, j; };
 ```
 
 > [!NOTE]
-> A new move type requires adding overloads to all existing variants (e.g., `tsptw::Strict`, `tsptw::Relaxed`). This is a design decision for each (move type, variant) pair, not boilerplate. Existing variant updates will be handled during review -- open your PR with the algorithm and the maintainer will handle variant updates if needed.
+> A new move type requires adding overloads to all existing variants (e.g., `time_windows::Strict`, `time_windows::Relaxed`). This is a design decision for each (move type, variant) pair, not boilerplate. Existing variant updates will be handled during review -- open your PR with the algorithm and the maintainer will handle variant updates if needed.
 
 ### Step 3: Declare the Solver method
 
@@ -194,7 +194,7 @@ struct AlgoTwoOpt {
 using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoTwoOpt>;
 ```
 
-Each algorithm provides two `operator()` overloads: one without callbacks (for `test_algorithms` and the benchmark runner) and one with callbacks (for `test_variants`). Both template on `TourCost` so the algorithm works with custom tour cost functions like `tsptw::Relaxed`.
+Each algorithm provides two `operator()` overloads: one without callbacks (for `test_algorithms` and the benchmark runner) and one with callbacks (for `test_variants`). Both template on `TourCost` so the algorithm works with custom tour cost functions like `time_windows::Relaxed`.
 
 This single registration automatically enables the algorithm in `test_algorithms` (contract tests), `test_variants` (variant cross-product tests), and the [benchmark runner](BENCHMARKING.md).
 
@@ -305,7 +305,7 @@ Also add focused tests in `tests/test_callbacks.cpp` for specific behaviors (pro
 
 Add the variant to `CALLBACKS.md` and [VARIANTS.md](VARIANTS.md) with usage examples and supported callbacks.
 
-See `variants/tsptw.hpp` for a complete example (Strict with `AppendMove` + `DPMove` overloads, Relaxed with `tour_cost` + `DPMove` overloads).
+See `variants/time_windows.hpp` for a complete example (Strict with `AppendMove` + `DPMove` overloads, Relaxed with `tour_cost` + `DPMove` overloads).
 
 ## Writing tests
 

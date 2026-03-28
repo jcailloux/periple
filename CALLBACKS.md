@@ -129,7 +129,7 @@ struct ConstrainedSelector {
     }
 };
 
-solver.greedy_construct(ConstrainedSelector{}, tsptw_strict);
+solver.greedy_construct(ConstrainedSelector{}, tw_strict);
 ```
 
 ### `NearestSelector`

@@ -127,10 +127,10 @@ solver.nearest_neighbor().two_opt();
 Customize algorithm behavior without modifying internal logic. Variant callbacks are optional and zero-overhead when not used.
 
 ```cpp
-#include <periple/variants/tsptw.hpp>
+#include <periple/variants/time_windows.hpp>
 
 // TSPTW: reject moves that violate time windows
-periple::tsptw::Strict tw(dist, windows);
+periple::time_windows::Strict tw(dist, windows);
 solver.nearest_neighbor(tw);
 
 // Custom construction strategy
