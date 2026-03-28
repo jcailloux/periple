@@ -30,19 +30,11 @@ auto Solver<Dist, Variant>::greedy_construct(
 			&& "greedy_construct: resume_at exceeds current tour length");
 		const auto k = params.resume_at;
 		ensure_capacity(total);
+		n_ = k;
+		cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), k));
 		std::fill_n(visited_.data(), total, uint8_t{0});
 		for (std::size_t i = 0; i < k; ++i)
 			visited_[static_cast<std::size_t>(tour_[i])] = 1;
-		n_ = k;
-		auto prefix = std::span<const city_type>(tour_.data(), k);
-		const auto& variant = variant_ref();
-		if constexpr (requires {
-			{ variant.on_truncate(*dist_, prefix) } -> std::convertible_to<cost_type>;
-		}) {
-			cost_ = static_cast<cost_type>(variant.on_truncate(*dist_, prefix));
-		} else {
-			cost_ = compute_tour_cost(prefix);
-		}
 		status_ = SolutionStatus::partial;
 	} else {
 		if (try_trivial()) return *this;

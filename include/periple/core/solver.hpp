@@ -1,7 +1,6 @@
 #pragma once
 
-#include <periple/core/traits.hpp>
-#include <periple/core/moves.hpp>
+#include <periple/core/dimensions.hpp>
 #include <periple/core/log.hpp>
 #include <periple/core/caches/hk_cache.hpp>
 
@@ -56,6 +55,7 @@ class Solver {
 public:
 	using cost_type = typename dist_traits<Dist>::cost_type;
 	using city_type = typename dist_traits<Dist>::city_type;
+	using context_type = typename context_for<Variant, city_type, cost_type>::type;
 
 	// --- Lifecycle ----------------------------------------------------------
 
@@ -72,6 +72,7 @@ public:
 	[[nodiscard]] auto status()    const -> SolutionStatus;
 	[[nodiscard]] auto size()      const -> std::size_t;
 	[[nodiscard]] auto tour()      const -> std::span<const city_type>;
+	[[nodiscard]] auto position()  const -> std::span<const city_type>;
 	[[nodiscard]] auto cost()      const -> cost_type;
 	[[nodiscard]] auto symmetric() const -> bool;
 	[[nodiscard]] auto is_visited(city_type city) const -> bool;
@@ -86,6 +87,13 @@ public:
 	// Returns the k nearest neighbors of city, sorted by distance.
 	// Computed lazily on first call; grows if k exceeds previous requests.
 	[[nodiscard]] auto neighbors(city_type city, std::size_t k) -> std::span<const city_type>;
+
+	// --- Evaluation ---------------------------------------------------------
+
+	// Tentative evaluation: init + prepare + filter -> score.
+	// Returns nullopt if the variant's move_filter rejects the city.
+	// Does not modify observable solver state (writes to mutable ctx_).
+	[[nodiscard]] auto evaluate(city_type city) const -> std::optional<double>;
 
 	// --- Construction primitives --------------------------------------------
 
@@ -102,46 +110,6 @@ public:
 	auto greedy_construct(Strategy strategy,
 	                      ConstructParams params = {}) -> Solver&;
 
-	// --- Generic variant dispatch -------------------------------------------
-
-	// Check if the variant's move_filter accepts these arguments.
-	// Returns true if the variant has no move_filter for this signature.
-	template <typename... Args>
-	[[nodiscard]] auto filter(Args&&... args) const -> bool {
-		if constexpr (requires {
-			{ variant_ref().move_filter(std::forward<Args>(args)...) }
-				-> std::convertible_to<bool>;
-		}) {
-			return variant_ref().move_filter(std::forward<Args>(args)...);
-		} else {
-			return true;
-		}
-	}
-
-	// Returns the variant's move_eval result, or raw_cost if not provided.
-	// The return type preserves the variant's move_eval return type when
-	// available, allowing scoring with higher precision than cost_type.
-	template <typename CostT, typename... Args>
-	[[nodiscard]] auto eval(CostT raw_cost, Args&&... args) const {
-		if constexpr (requires {
-			variant_ref().move_eval(std::forward<Args>(args)...);
-		}) {
-			return variant_ref().move_eval(std::forward<Args>(args)...);
-		} else {
-			return raw_cost;
-		}
-	}
-
-	// Calls the variant's on_move if provided. No-op otherwise.
-	template <typename... Args>
-	void notify(Args&&... args) const {
-		if constexpr (requires {
-			variant_ref().on_move(std::forward<Args>(args)...);
-		}) {
-			variant_ref().on_move(std::forward<Args>(args)...);
-		}
-	}
-
 #ifdef PERIPLE_TESTING
 	template <DistanceSource D, typename V> friend class SolverTestAccess;
 #endif
@@ -153,10 +121,9 @@ private:
 	void rebuild_position();
 	void invalidate_caches();
 	void check_symmetry() const;
-	auto compute_tour_cost(std::span<const city_type> t) const -> cost_type;
+	auto rebuild_and_cost(std::span<const city_type> t) -> cost_type;
+	void finalize_closing_edge();
 
-	// Returns a reference to variant_ if non-null, otherwise a local NoCallbacks.
-	// For NoCallbacks Variant, all if constexpr checks compile to nothing.
 	auto variant_ref() const -> const Variant& {
 		if constexpr (std::is_same_v<Variant, NoCallbacks>) {
 			static constexpr NoCallbacks fallback{};
@@ -182,6 +149,9 @@ private:
 	std::vector<uint8_t>   dont_look_;
 	std::vector<city_type> neighbors_;
 	std::size_t            neighbors_k_ = 0;
+
+	// Evaluation context (mutable: evaluate() is const)
+	mutable context_type ctx_;
 
 	// Algorithm caches (lazy, one per algorithm that needs persistent state)
 	std::optional<HKCache<cost_type, city_type>> hk_cache_;
@@ -209,6 +179,7 @@ void Solver<Dist, Variant>::set_matrix(const Dist& dist) {
 	status_ = SolutionStatus::none;
 	n_      = 0;
 	cost_   = {};
+	ctx_.reset();
 	invalidate_caches();
 	if (symmetric_) check_symmetry();
 }
@@ -223,6 +194,7 @@ void Solver<Dist, Variant>::clear() {
 	status_ = SolutionStatus::none;
 	n_      = 0;
 	cost_   = {};
+	ctx_.reset();
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -245,6 +217,11 @@ auto Solver<Dist, Variant>::size() const -> std::size_t {
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::tour() const -> std::span<const city_type> {
 	return {tour_.data(), n_};
+}
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::position() const -> std::span<const city_type> {
+	return {position_.data(), n_};
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -285,7 +262,6 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 	const auto total = dist_->size();
 	assert(t.size() <= total && "set_tour: tour exceeds matrix size");
 
-	// Debug validation: no duplicates, cities within bounds.
 	assert([&] {
 		for (std::size_t i = 0; i < t.size(); ++i) {
 			if (static_cast<std::size_t>(t[i]) >= total) return false;
@@ -299,22 +275,19 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 	n_ = t.size();
 	std::copy(t.begin(), t.end(), tour_.begin());
 
-	if (n_ == total) {
-		cost_   = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
-		status_ = SolutionStatus::feasible;
-	} else if (n_ > 0) {
-		cost_   = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
-		status_ = SolutionStatus::partial;
-		// Mark visited cities for potential continuation.
-		std::fill_n(visited_.data(), total, uint8_t{0});
-		for (std::size_t i = 0; i < n_; ++i)
-			visited_[static_cast<std::size_t>(t[i])] = 1;
+	if (n_ > 0) {
+		cost_   = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
+		status_ = (n_ == total) ? SolutionStatus::feasible : SolutionStatus::partial;
+		if (n_ < total) {
+			std::fill_n(visited_.data(), total, uint8_t{0});
+			for (std::size_t i = 0; i < n_; ++i)
+				visited_[static_cast<std::size_t>(t[i])] = 1;
+		}
 	} else {
 		cost_   = {};
 		status_ = SolutionStatus::none;
+		ctx_.reset();
 	}
-
-	rebuild_position();
 }
 
 // --- Internal helpers -------------------------------------------------------
@@ -324,6 +297,7 @@ void Solver<Dist, Variant>::ensure_capacity(std::size_t n) {
 	if (tour_.size()     < n) tour_.resize(n);
 	if (position_.size() < n) position_.resize(n);
 	if (visited_.size()  < n) visited_.resize(n);
+	ctx_.resize(n);
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -388,11 +362,9 @@ void Solver<Dist, Variant>::ensure_neighbors(std::size_t k) {
 	neighbors_k_ = k;
 	neighbors_.resize(n * k);
 
-	// Temporary buffer for sorting candidates.
 	std::vector<city_type> candidates(n - 1);
 
 	for (std::size_t i = 0; i < n; ++i) {
-		// Fill with all cities except i.
 		std::size_t idx = 0;
 		for (std::size_t j = 0; j < n; ++j)
 			if (j != i) candidates[idx++] = static_cast<city_type>(j);
@@ -411,22 +383,61 @@ void Solver<Dist, Variant>::ensure_neighbors(std::size_t k) {
 	}
 }
 
+// --- rebuild_and_cost -------------------------------------------------------
+
 template <DistanceSource Dist, typename Variant>
-auto Solver<Dist, Variant>::compute_tour_cost(std::span<const city_type> t)
-	const -> cost_type
-{
-	if constexpr (requires(const Variant& v) {
-		{ v.tour_cost(*dist_, t) } -> std::convertible_to<cost_type>;
-	}) {
-		return static_cast<cost_type>(variant_ref().tour_cost(*dist_, t));
-	} else {
-		cost_type total{};
-		const bool closed = (t.size() == dist_->size());
-		const auto edges = closed ? t.size() : t.size() - 1;
-		for (std::size_t i = 0; i < edges; ++i)
-			total += (*dist_)(t[i], t[(i + 1) % t.size()]);
-		return total;
+auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> cost_type {
+	ctx_.reset();
+	cost_type total_cost{};
+
+	for (std::size_t i = 0; i < t.size(); ++i) {
+		AppendMove<city_type> move{t[i]};
+		ctx_.init(move, *dist_, {t.data(), i}, {position_.data(), i}, total_cost);
+		invoke_prepare(variant_ref(), move, ctx_);
+
+		if (i > 0)
+			total_cost += static_cast<cost_type>(static_cast<double>((*dist_)(t[i - 1], t[i])) + ctx_.cost_delta);
+
+		ctx_.commit(move);
+		position_[static_cast<std::size_t>(t[i])] = static_cast<city_type>(i);
 	}
+
+	// Closing edge (complete tour only).
+	if (t.size() == dist_->size() && t.size() > 1) {
+		AppendMove<city_type> closing{t[0]};
+		ctx_.init(closing, *dist_, {t.data(), t.size()}, {position_.data(), t.size()}, total_cost);
+		invoke_prepare(variant_ref(), closing, ctx_);
+		total_cost += static_cast<cost_type>(static_cast<double>((*dist_)(t.back(), t[0])) + ctx_.cost_delta);
+	}
+
+	return total_cost;
+}
+
+// --- finalize_closing_edge --------------------------------------------------
+
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::finalize_closing_edge() {
+	if (n_ <= 1) return;
+	AppendMove<city_type> closing{tour_[0]};
+	ctx_.init(closing, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
+	invoke_prepare(variant_ref(), closing, ctx_);
+	cost_ += static_cast<cost_type>(static_cast<double>((*dist_)(tour_[n_ - 1], tour_[0])) + ctx_.cost_delta);
+}
+
+// --- Evaluation -------------------------------------------------------------
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::evaluate(city_type city) const -> std::optional<double> {
+	assert(dist_ && "evaluate: no distance source set");
+	assert(n_ > 0 && "evaluate: tour must have at least one city");
+
+	AppendMove<city_type> move{city};
+	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
+	invoke_prepare(variant_ref(), move, ctx_);
+	if (!invoke_filter(variant_ref(), move, ctx_))
+		return std::nullopt;
+
+	return static_cast<double>((*dist_)(tour_[n_ - 1], city)) + ctx_.cost_delta;
 }
 
 // --- Construction primitives ------------------------------------------------
@@ -442,27 +453,23 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 	if (n_ == 0)
 		std::fill_n(visited_.data(), total, uint8_t{0});
 
-	// Accumulate edge cost via variant dispatch.
-	auto cost_before = cost_;
-	if (n_ > 0) {
-		auto raw = (*dist_)(tour_[n_ - 1], city);
-		AppendMove<city_type, cost_type> move{city, {tour_.data(), n_}, cost_};
-		cost_ += static_cast<cost_type>(eval(raw, move));
-	}
+	AppendMove<city_type> move{city};
+	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
+	invoke_prepare(variant_ref(), move, ctx_);
 
-	// Place and mark visited.
+	if (n_ > 0)
+		cost_ += static_cast<cost_type>(static_cast<double>((*dist_)(tour_[n_ - 1], city)) + ctx_.cost_delta);
+
 	tour_[n_] = city;
 	visited_[static_cast<std::size_t>(city)] = 1;
+	position_[static_cast<std::size_t>(city)] = static_cast<city_type>(n_);
 	++n_;
 
-	// Notify variant (tour now includes the new city, cost is before this append).
-	notify(AppendMove<city_type, cost_type>{city, {tour_.data(), n_}, cost_before});
+	ctx_.commit(move);
 
-	// Auto-finalize if tour is complete.
 	if (n_ == total) {
-		cost_ = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
+		finalize_closing_edge();
 		status_ = SolutionStatus::feasible;
-		rebuild_position();
 	} else {
 		status_ = SolutionStatus::partial;
 	}
@@ -472,7 +479,7 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::can_append(city_type city) const -> bool {
-	return filter(AppendMove<city_type, cost_type>{city, {tour_.data(), n_}, cost_});
+	return evaluate(city).has_value();
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -502,7 +509,6 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t,
 	const auto total = dist_->size();
 	assert(t.size() <= total && "set_tour: tour exceeds matrix size");
 
-	// Debug validation: no duplicates, cities within bounds.
 	assert([&] {
 		for (std::size_t i = 0; i < t.size(); ++i) {
 			if (static_cast<std::size_t>(t[i]) >= total) return false;
@@ -515,6 +521,11 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t,
 	ensure_capacity(total);
 	n_ = t.size();
 	std::copy(t.begin(), t.end(), tour_.begin());
+
+	// Rebuild dimensions (the cost is overridden below).
+	if (n_ > 0)
+		rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
+
 	cost_ = known_cost;
 
 	if (n_ == total) {
@@ -527,8 +538,6 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t,
 	} else {
 		status_ = SolutionStatus::none;
 	}
-
-	rebuild_position();
 }
 
 // --- CTAD guides ------------------------------------------------------------

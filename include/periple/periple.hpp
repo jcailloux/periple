@@ -2,6 +2,8 @@
 
 #include <periple/core/traits.hpp>
 #include <periple/core/moves.hpp>
+#include <periple/core/dimensions.hpp>
+#include <periple/core/dimensions/route_timing.hpp>
 #include <periple/core/solver.hpp>
 #include <periple/distance/coordinate.hpp>
 #include <periple/distance/functions.hpp>

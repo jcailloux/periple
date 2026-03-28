@@ -14,15 +14,12 @@
 namespace periple {
 
 template <DistanceSource Dist, typename Variant>
-auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
-	-> Solver&
-{
+auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
 	if (try_trivial()) {
 		status_ = SolutionStatus::optimal;
 		return *this;
 	}
 
-	using move_type = DPMove<city_type, cost_type>;
 	constexpr auto INF = std::numeric_limits<cost_type>::max();
 
 	n_ = dist_->size();
@@ -48,6 +45,10 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
 	// Base: start at city 0
 	dp[idx(1, 0)] = cost_type{};
 
+	const auto& variant = variant_ref();
+	const std::span<const city_type> tour_span{tour_.data(), n_};
+	const std::span<const city_type> pos_span{position_.data(), n_};
+
 	// Forward DP
 	const std::size_t complement_mask = num_sets - 1;
 	for (std::size_t S = 1; S < num_sets; S += 2) { // S += 2: city 0 always in set
@@ -62,20 +63,20 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
 				auto cj = static_cast<city_type>(j);
 				auto raw_dist = (*dist_)(ci, cj);
 
-				move_type move{ci, cj, dp[idx(S, i)], S};
+				DPMove<city_type> move{ci, cj, S};
+				ctx_.init(move, *dist_, tour_span, pos_span, dp[idx(S, i)]);
+				invoke_prepare(variant, move, ctx_);
 
-				if (!filter(move)) continue;
+				if (!invoke_filter(variant, move, ctx_)) continue;
 
-				cost_type edge_cost = static_cast<cost_type>(
-					eval(raw_dist, move));
+				cost_type edge_cost = static_cast<cost_type>(static_cast<double>(raw_dist) + ctx_.cost_delta);
 
 				std::size_t S_next = S | (std::size_t{1} << j);
 				cost_type new_cost = dp[idx(S, i)] + edge_cost;
 				if (new_cost < dp[idx(S_next, j)]) {
 					dp[idx(S_next, j)]     = new_cost;
 					parent[idx(S_next, j)] = ci;
-
-					notify(move);
+					ctx_.commit(move);
 				}
 			}
 		}
@@ -92,12 +93,13 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
 		auto ci = static_cast<city_type>(i);
 		auto raw_dist = (*dist_)(ci, city_type{0});
 
-		move_type move{ci, city_type{0}, dp[idx(full, i)], full};
+		DPMove<city_type> move{ci, city_type{0}, full};
+		ctx_.init(move, *dist_, tour_span, pos_span, dp[idx(full, i)]);
+		invoke_prepare(variant, move, ctx_);
 
-		if (!filter(move)) continue;
+		if (!invoke_filter(variant, move, ctx_)) continue;
 
-		cost_type edge_cost = static_cast<cost_type>(
-			eval(raw_dist, move));
+		cost_type edge_cost = static_cast<cost_type>(static_cast<double>(raw_dist) + ctx_.cost_delta);
 
 		cost_type c = dp[idx(full, i)] + edge_cost;
 		if (c < best_cost) {
@@ -124,9 +126,8 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams)
 		return *this;
 	}
 
-	cost_ = compute_tour_cost(std::span<const city_type>(tour_.data(), n_));
+	cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
 	status_ = SolutionStatus::optimal;
-	rebuild_position();
 	return *this;
 }
 

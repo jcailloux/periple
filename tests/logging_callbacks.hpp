@@ -2,7 +2,6 @@
 
 #include <periple/core/moves.hpp>
 
-#include <span>
 #include <string>
 #include <vector>
 
@@ -12,15 +11,15 @@ namespace periple {
 struct LoggingCallbacks {
 	mutable std::vector<std::string> log;
 
-	template <typename CityT, typename CostT>
-	bool move_filter(const AppendMove<CityT, CostT>&) const {
+	template <typename CityT>
+	bool move_filter(const AppendMove<CityT>&) const {
 		log.push_back("move_filter");
 		return true;
 	}
 
-	template <typename CityT, typename CostT>
-	void on_move(const AppendMove<CityT, CostT>&) const {
-		log.push_back("on_move");
+	template <typename CityT>
+	void move_prepare(const AppendMove<CityT>&) const {
+		log.push_back("move_prepare");
 	}
 };
 

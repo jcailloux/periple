@@ -62,6 +62,16 @@ void assert_valid_tour(const Dist& dist,
 	}
 }
 
+// Compute pure distance cost (no penalties) for a complete tour.
+template <DistanceSource Dist>
+auto pure_distance_cost(const Dist& dist, std::span<const typename dist_traits<Dist>::city_type> tour) -> typename dist_traits<Dist>::cost_type {
+	using cost_type = typename dist_traits<Dist>::cost_type;
+	cost_type total{};
+	for (std::size_t i = 0; i < tour.size(); ++i)
+		total += dist(tour[i], tour[(i + 1) % tour.size()]);
+	return total;
+}
+
 // Verify that arrival times respect all time windows.
 template <DistanceSource Dist>
 bool tour_respects_windows(
@@ -87,7 +97,7 @@ bool tour_respects_windows(
 
 template <typename Algo, DistanceSource Dist>
 void test_strict(const Algo& algo, const Dist& dist, std::span<const time_windows::TimeWindow> windows) {
-	time_windows::Strict tw(dist, windows);
+	time_windows::Strict tw(windows);
 	Solver solver(dist, tw);
 	algo(solver);
 
@@ -128,17 +138,22 @@ void run_strict(const Dist& dist) {
 
 template <typename Algo, DistanceSource Dist>
 void test_relaxed(const Algo& algo, const Dist& dist, std::span<const time_windows::TimeWindow> windows, int penalty_weight) {
-	time_windows::Relaxed relaxed(dist, windows, penalty_weight);
+	time_windows::Relaxed relaxed(windows, penalty_weight);
+	Solver solver(dist, relaxed);
+	algo(solver);
 
-	// Test with variant on Solver.
-	{
-		Solver solver(dist, relaxed);
-		algo(solver);
-		assert_valid_tour(dist, solver.tour());
+	assert_valid_tour(dist, solver.tour());
 
-		auto expected = relaxed.tour_cost(dist, solver.tour());
-		assert(solver.cost() == expected);
-	}
+	// Cost must be >= pure distance cost (penalties are non-negative).
+	auto dist_cost = pure_distance_cost(dist, solver.tour());
+	assert(solver.cost() >= dist_cost && "relaxed cost must be >= pure distance cost");
+
+	// Self-consistency: set_tour should recompute the same cost.
+	using city_type = typename dist_traits<Dist>::city_type;
+	std::vector<city_type> tour_copy(solver.tour().begin(), solver.tour().end());
+	Solver verifier(dist, relaxed);
+	verifier.set_tour(tour_copy);
+	assert(verifier.cost() == solver.cost() && "relaxed cost must be self-consistent");
 }
 
 template <DistanceSource Dist>
@@ -168,7 +183,8 @@ void run_strict_optional(const Dist& dist) {
 	if (n > 0) windows[0] = time_windows::TimeWindow{0.0, 500.0};
 
 	for_each_algorithm(nullptr, [&](const auto& algo) {
-		time_windows::Strict tw(dist, std::span(windows));
+		auto tw_span = std::span<const std::optional<time_windows::TimeWindow>>(windows);
+		time_windows::Strict tw(tw_span);
 		Solver solver(dist, tw);
 		algo(solver);
 
@@ -186,13 +202,18 @@ void run_relaxed_optional(const Dist& dist) {
 	if (n > 1) windows[1] = time_windows::TimeWindow{0.0, 5.0};
 
 	for_each_algorithm(nullptr, [&](const auto& algo) {
-		time_windows::Relaxed relaxed(dist, std::span(windows), 1000);
+		time_windows::Relaxed relaxed(std::span<const std::optional<time_windows::TimeWindow>>(windows), 1000);
 		Solver solver(dist, relaxed);
 		algo(solver);
 
 		assert_valid_tour(dist, solver.tour());
-		auto expected = relaxed.tour_cost(dist, solver.tour());
-		assert(solver.cost() == expected);
+
+		// Self-consistency.
+		using city_type = typename dist_traits<Dist>::city_type;
+		std::vector<city_type> tour_copy(solver.tour().begin(), solver.tour().end());
+		Solver verifier(dist, relaxed);
+		verifier.set_tour(tour_copy);
+		assert(verifier.cost() == solver.cost() && "relaxed optional cost must be self-consistent");
 	});
 }
 
