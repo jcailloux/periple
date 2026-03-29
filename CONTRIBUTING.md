@@ -20,51 +20,66 @@ Pull requests should target the `dev` branch. `main` is updated from `dev` at re
 
 ## Architecture
 
-Every algorithm follows a two-layer pattern inside a single header file (`algorithms/<name>.hpp`):
+### Solver
 
-**Layer 1: `detail::` free function.** Pure algorithmic logic. Takes its inputs and output buffers as `std::span`. No dependency on `Solver`. This function is independently testable and benchmarkable.
+`Solver<Dist, Variant>` is the central type. `Dist` is the distance source, `Variant` is the variant (defaults to `NoCallbacks`). CTAD allows `Solver solver(matrix)` or `Solver solver(matrix, variant)`.
 
-For constructive algorithms, the generic loop is `detail::greedy_append_build` which takes a strategy and optional variant callbacks. The strategy provides `select_next(dist, partial_tour, visited[, variant]) -> std::optional<city_type>`. Returning `std::nullopt` stops construction (partial tour). An optional `on_placed` hook is called after each placement. If variant callbacks are provided, the framework forwards them to strategy methods that accept a 4th `variant` parameter.
+The Solver stores a pointer to the variant (`const Variant*`). The variant must outlive the Solver.
 
-```cpp
-namespace periple {
-namespace detail {
+### Evaluation pipeline
 
-template <DistanceSource Dist, typename Strategy, typename Variant>
-auto greedy_append_build(
-    const Dist& dist, std::size_t n, std::size_t start_step,
-    std::span<typename dist_traits<Dist>::city_type> tour,
-    std::span<uint8_t> visited,
-    Strategy& strategy, const Variant& variant) -> std::size_t;
+Every algorithm uses the same pipeline to evaluate candidate moves:
 
-} // namespace detail
-} // namespace periple
+```
+1. ctx_.init(move, dist, tour, position, cost)   -- initialize dimension state
+2. invoke_prepare(variant, move, ctx_)            -- variant adjusts cost_delta/dimensions
+3. invoke_filter(variant, move, ctx_)             -- variant checks feasibility
+4. score = dist(from, to) + ctx_.cost_delta       -- final score
 ```
 
-**Layer 2: `Solver::` method.** A thin wrapper declared in `core/solver.hpp` and defined `inline` in the algorithm header. It sizes workspace buffers, calls the `detail::` function, updates solver state, and returns `*this` for chaining.
+Key Solver methods:
+
+- **`evaluate(city)`** -- runs the pipeline, returns `std::optional<double>` (nullopt if filtered). Does not modify observable state (writes to `mutable ctx_`).
+- **`append(city)`** -- runs init + prepare, applies the move (places city, updates cost), commits dimension state.
+- **`rebuild_and_cost(tour)`** -- replays a complete tour through the pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. Used by `set_tour`, `resume_at`, `clear`.
+- **`finalize_closing_edge()`** -- adds the return-to-start edge cost for complete tours.
+
+### EvalContext
+
+The Solver owns a `context_type` deduced from the variant's `dimension` typedef:
+
+| Variant | Context |
+|---|---|
+| No `dimension` typedef | `EmptyContext<CityT, CostT>` |
+| `using dimension = T` | `EvalContext<CityT, CostT, T>` |
+| `using dimension = Dimensions<Ts...>` | `EvalContext<CityT, CostT, Ts...>` |
+
+`EvalContext` provides:
+- `cost_delta` (double, mutable) -- additive cost adjustment
+- `dim<D>()` -- access dimension D
+- `tour()`, `position()`, `cost()` -- read-only solver state
+- `init()`, `commit()`, `snapshot()`, `restore()` -- lifecycle methods
+
+### Algorithm structure
+
+Algorithms are defined inline in `algorithms/*.hpp`. Each algorithm header includes `core/solver.hpp` and defines a `Solver::method()`.
+
+Constructive algorithms use `greedy_construct` with a strategy:
 
 ```cpp
-template <DistanceSource Dist, typename TourCost>
-template <typename Variant>
-auto Solver<Dist, TourCost>::nearest_neighbor(
-    const Variant& variant, NearestNeighborParams params)
-    -> Solver&
-{
-    return greedy_construct(NearestSelector{}, variant,
-                            ConstructParams{.start_city = params.start_city});
+// NearestSelector calls solver.evaluate() in a loop, picks the minimum.
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::nearest_neighbor(NearestNeighborParams params) -> Solver& {
+    return greedy_construct(NearestSelector{}, ConstructParams{...});
 }
 ```
 
-Key points:
+`greedy_construct` handles the generic loop: start city, repeated `strategy.select_next(solver)` + `append`, termination on `nullopt`.
 
-- The `detail::` function never touches `Solver` internals. It receives everything it needs through its parameters.
-- The `Solver::` method handles buffer management and state updates only. No algorithmic logic.
-- Set `status_` to `SolutionStatus::feasible` for heuristics, `SolutionStatus::optimal` for exact solvers.
-- Constructive facades (like `nearest_neighbor`) delegate to `greedy_construct` with `NearestSelector`.
-- The `Solver` has a second template parameter `TourCost` (defaults to `DefaultTourCost`) for custom tour cost computation.
+Exact algorithms (Held-Karp) use the pipeline directly with `DPMove`.
 
 > [!IMPORTANT]
-> `position_` is the inverse index of `tour_`: `position_[city]` gives the position of a city in the current tour. Improvement algorithms use it for O(1) lookups. If your algorithm modifies the tour and reads `position_`, call `rebuild_position()` each time the tour changes and `position_` is needed. At minimum, always call it once at the end of the `Solver::` method so that subsequent algorithms in a chain see a consistent state.
+> `position_` is the inverse index of `tour_`: `position_[city]` gives the position of a city in the current tour. If your algorithm modifies the tour and reads `position_`, call `rebuild_position()` each time the tour changes and `position_` is needed.
 
 ## Adding an algorithm
 
@@ -80,29 +95,25 @@ struct TwoOptParams {
 
 ### Step 2: Define Move types
 
-Each algorithm defines its own Move types. These are part of the public interface and determine which callback overloads users can provide. Define them in `core/moves.hpp`:
+Each algorithm family defines its own Move types. These are part of the public interface and determine which callback overloads users can provide. Define them in `core/moves.hpp`:
 
 ```cpp
 struct TwoOptMove { std::size_t i, j; };
 ```
 
-> [!NOTE]
-> A new move type requires adding overloads to all existing variants (e.g., `time_windows::Strict`, `time_windows::Relaxed`). This is a design decision for each (move type, variant) pair, not boilerplate. Existing variant updates will be handled during review -- open your PR with the algorithm and the maintainer will handle variant updates if needed.
+A new move type requires adding overloads to existing variants. Existing variant updates will be handled during review -- open your PR with the algorithm and the maintainer will handle variant updates if needed.
 
 ### Step 3: Declare the Solver method
 
-In the `Solver` class in `core/solver.hpp`, declare overloads with and without variant callbacks. Variant callbacks come first, params last:
+In the `Solver` class in `core/solver.hpp`:
 
 ```cpp
 auto two_opt(TwoOptParams params = {}) -> Solver&;
-
-template <typename Variant>
-auto two_opt(const Variant& variant, TwoOptParams params = {}) -> Solver&;
 ```
 
 ### Step 4: Implement the algorithm header
 
-Create `algorithms/two_opt.hpp`. Start the file with a reference block documenting the academic sources. Use `if constexpr` + `requires` to detect callback presence:
+Create `algorithms/two_opt.hpp`. Start with a reference block citing academic sources. Use the evaluation pipeline:
 
 ```cpp
 #pragma once
@@ -114,50 +125,12 @@ Create `algorithms/two_opt.hpp`. Start the file with a reference block documenti
 #include <periple/core/solver.hpp>
 
 namespace periple {
-namespace detail {
 
 template <DistanceSource Dist, typename Variant>
-auto two_opt_improve(
-    const Dist& dist, std::size_t n,
-    std::span<typename dist_traits<Dist>::city_type> tour,
-    std::span<typename dist_traits<Dist>::city_type> position,
-    typename dist_traits<Dist>::cost_type current_cost,
-    TwoOptParams params, const Variant& variant)
-    -> typename dist_traits<Dist>::cost_type
-{
-    using city_type = typename dist_traits<Dist>::city_type;
-
-    // For each candidate move:
-    // 1. Check move_filter (if defined)
-    if constexpr (requires(const Variant& v, std::span<const city_type> t,
-                           const TwoOptMove& m) {
-        { c.move_filter(t, m) } -> std::convertible_to<bool>;
-    }) {
-        if (!variant.move_filter(tour_span, move)) continue;
-    }
-
-    // 2. Use move_score > move_eval > dist for accept/reject decisions
-    // 3. Use move_eval > dist for cost tracking
-    // 4. Call on_commit after applying the move
-}
-
-} // namespace detail
-
-// With variant callbacks (primary implementation).
-template <DistanceSource Dist, typename TourCost>
-template <typename Variant>
-auto Solver<Dist, TourCost>::two_opt(const Variant& variant, TwoOptParams params)
-    -> Solver&
-{
-    // ... buffer setup, call detail function, update state ...
-}
-
-// Without variant callbacks (forwards to primary).
-template <DistanceSource Dist, typename TourCost>
-auto Solver<Dist, TourCost>::two_opt(TwoOptParams params)
-    -> Solver&
-{
-    return two_opt(NoCallbacks{}, params);
+auto Solver<Dist, Variant>::two_opt(TwoOptParams params) -> Solver& {
+    // Use evaluate(), append(), ctx_.init(), invoke_prepare(), invoke_filter()
+    // Set status_ to SolutionStatus::feasible for heuristics,
+    //   SolutionStatus::optimal for exact solvers.
 }
 
 } // namespace periple
@@ -184,23 +157,16 @@ struct AlgoTwoOpt {
     static constexpr bool is_metaheuristic  = false;
     static constexpr int  max_tier          = 5;
 
-    template <DistanceSource Dist, typename TC>
-    void operator()(Solver<Dist, TC>& s, unsigned = 0) const { s.two_opt(); }
-
-    template <DistanceSource Dist, typename TC, typename Variant>
-    void operator()(Solver<Dist, TC>& s, const Variant& variant) const { s.two_opt(variant); }
+    template <DistanceSource Dist, typename V>
+    void operator()(Solver<Dist, V>& s, unsigned = 0) const { s.two_opt(); }
 };
 
 using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoTwoOpt>;
 ```
 
-Each algorithm provides two `operator()` overloads: one without callbacks (for `test_algorithms` and the benchmark runner) and one with callbacks (for `test_variants`). Both template on `TourCost` so the algorithm works with custom tour cost functions like `time_windows::Relaxed`.
-
-This single registration automatically enables the algorithm in `test_algorithms` (contract tests), `test_variants` (variant cross-product tests), and the [benchmark runner](BENCHMARKING.md).
+This automatically enables the algorithm in `test_algorithms` (contract tests), `test_variants` (variant cross-product tests), and the [benchmark runner](BENCHMARKING.md).
 
 ### Step 7: Verify
-
-Run both test suites to confirm the new algorithm passes all automated checks:
 
 ```bash
 cmake --build .build/debug
@@ -235,15 +201,11 @@ struct LKCache {
 } // namespace periple
 ```
 
-`reset()` should clear data that is tied to a specific problem instance. The algorithm will resize buffers as needed on the next call.
-
 **b) Register the cache in `solver.hpp`**: include the header, add an `std::optional` member, and add the `reset()` call in `invalidate_caches()`:
 
 ```cpp
-// Include
 #include <periple/core/caches/lk_cache.hpp>
 
-// Member (in the Solver class)
 std::optional<LKCache<cost_type, city_type>> lk_cache_;
 
 // In invalidate_caches()
@@ -264,72 +226,76 @@ Shared workspace buffers (`tour_`, `position_`, `visited_`, `dont_look_`, `neigh
 
 ## Adding a variant
 
-Variants encode problem-specific constraints (time windows, capacities, precedences). Each variant provides callback overloads for every move type in the library so that it works with all algorithms.
+Variants encode problem-specific constraints. A variant provides `move_prepare` and/or `move_filter` overloads for each move type it supports.
 
 ### Step 1: Create the variant header
 
-Create `variants/my_constraint.hpp` in `include/periple/variants/`. Implement a struct with callback overloads for each move type:
+Create `variants/my_constraint.hpp` in `include/periple/variants/`. Provide overloads for each supported move type:
 
 ```cpp
+#pragma once
+
+#include <periple/core/dimensions/route_timing.hpp>
+
 namespace periple::my_constraint {
 
 struct Strict {
+    using dimension = RouteTiming;  // declares which dimensions this variant needs
+
     // Constructive algorithms (AppendMove)
-    bool move_filter(std::span<const city_type> tour,
-                     const AppendMove<city_type>& m) const { ... }
-    void on_commit(std::span<const city_type> tour,
-                   const AppendMove<city_type>& m) const { ... }
+    template <typename CityT, typename Ctx>
+    void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const { /* ... */ }
+
+    template <typename CityT, typename Ctx>
+    bool move_filter(const AppendMove<CityT>& m, const Ctx& ctx) const { /* ... */ }
 
     // Exact algorithms (DPMove)
-    bool move_filter(const DPMove<city_type, cost_type>& m) const { ... }
-    void on_improve(const DPMove<city_type, cost_type>& m) const { ... }
+    template <typename CityT, typename Ctx>
+    void move_prepare(const DPMove<CityT>& m, Ctx& ctx) const { /* ... */ }
 
-    // Future: TwoOptMove, OrOptMove, etc.
+    template <typename CityT, typename Ctx>
+    bool move_filter(const DPMove<CityT>& m, const Ctx& ctx) const { /* ... */ }
 };
 
 } // namespace periple::my_constraint
 ```
 
-Adding a variant is an advanced contribution that involves designing the semantics of each (move type, variant) pair. Open an issue or draft PR to discuss the design in an issue or draft PR before implementing.
-
 ### Step 2: Write tests
 
-Add the variant to `tests/algorithms/test_variants.cpp`. The test runner crosses all algorithms with all variants automatically via `for_each_algorithm`. For each (algorithm, variant) pair, verify:
-
-1. Tour validity (all cities visited exactly once, or valid partial tour for strict variants).
-2. Constraint satisfaction (variant-specific validator).
-
-Also add focused tests in `tests/test_callbacks.cpp` for specific behaviors (protocol with `LoggingCallbacks`, edge cases).
+Add focused tests in `tests/` for specific behaviors. Add the variant to `tests/algorithms/test_variants.cpp` for cross-algorithm testing.
 
 ### Step 3: Document
 
-Add the variant to `CALLBACKS.md` and [VARIANTS.md](VARIANTS.md) with usage examples and supported callbacks.
+Add the variant to [CALLBACKS.md](CALLBACKS.md) and [VARIANTS.md](VARIANTS.md) with usage examples.
 
-See `variants/time_windows.hpp` for a complete example (Strict with `AppendMove` + `DPMove` overloads, Relaxed with `tour_cost` + `DPMove` overloads).
+See `variants/time_windows.hpp` and `variants/service_times.hpp` for complete examples.
 
 ## Writing tests
 
-Tests use plain `assert()` with no test framework. Core tests (distance matrices, solver, JonkerVolgenant) live in `tests/`. Algorithm tests are handled by a unified runner in `tests/algorithms/test_algorithms.cpp`:
+Tests use plain `assert()` with descriptive messages. Core tests live in `tests/`. Algorithm tests are in `tests/algorithms/`.
 
 ```
 tests/
-├── CMakeLists.txt
-├── test_distance_matrix.cpp
-├── test_solver.cpp
-└── algorithms/
-    ├── CMakeLists.txt
-    └── test_algorithms.cpp
+    CMakeLists.txt
+    test_distance_matrix.cpp
+    test_solver.cpp
+    test_callbacks.cpp
+    test_composed.cpp
+    algorithms/
+        CMakeLists.txt
+        test_algorithms.cpp
+        test_variants.cpp
 ```
 
 ### Automated algorithm tests
 
-Any algorithm registered in the [algorithm registry](#step-5-register-in-the-algorithm-registry) is automatically tested by `test_algorithms`. For each algorithm, the runner checks:
+Any algorithm registered in the [algorithm registry](#step-6-register-in-the-algorithm-registry) is automatically tested by `test_algorithms`. For each algorithm, the runner checks:
 
 1. **Tour validity** -- every city appears exactly once (sizes 0 through 5).
 2. **Cost consistency** -- reported cost matches the recomputed sum of edge weights.
 3. **Optimality** -- exact algorithms must match the brute-force optimum; heuristics must be >= optimum.
 4. **Symmetric instances** -- tested with `SymmetricDistanceMatrix`.
-5. **Asymmetric instances** -- tested with `DistanceMatrix` (or via JonkerVolgenant for `symmetric_only` algorithms).
+5. **Asymmetric instances** -- tested with `DistanceMatrix`.
 
 Run a single algorithm's tests by passing its tag:
 
@@ -346,7 +312,7 @@ The automated suite covers the common contract. If your algorithm has specific b
 
 - Reason about whether an optimization actually helps before adding it. An extra branch in a tight loop to handle a rare case is often worse than just handling it uniformly.
 - Don't add indirection (virtual calls, `std::function`, extra pointer chases) unless there is a clear design reason.
-- Document the expected time complexity in the `detail::` function.
+- Document the expected time complexity.
 - Use the shared workspace buffers (`visited_`, `position_`, etc.) rather than allocating temporaries.
 - Profile on realistic instance sizes before drawing conclusions. A micro-benchmark on 10 cities says little about behavior on 1000.
 
@@ -355,27 +321,20 @@ The automated suite covers the common contract. If your algorithm has specific b
 | Element | Convention | Example |
 |---------|-----------|---------|
 | Solver method | `algorithm_name()` (snake_case) | `nearest_neighbor()`, `two_opt()`, `held_karp()` |
-| Detail function | `detail::algorithm_name_verb()` | `detail::greedy_append_build()`, `detail::two_opt_improve()`, `detail::held_karp_solve()` |
 | Param struct | `AlgorithmNameParams` (PascalCase) | `NearestNeighborParams`, `TwoOptParams` |
 | Cache struct | `AbbreviationCache` (PascalCase) | `HKCache`, `LKCache`, `GACache` |
 | Cache file | `abbreviation_cache.hpp` | `hk_cache.hpp`, `lk_cache.hpp` |
 | Algorithm header | `algorithm_name.hpp` | `greedy_construct.hpp`, `two_opt.hpp` |
 | Registry struct | `AlgoAlgorithmName` (PascalCase) | `AlgoNearestNeighbor`, `AlgoTwoOpt` |
-
-Detail function verbs by category:
-
-| Category | Verb | Example |
-|----------|------|---------|
-| Construction | `_build` | `detail::nearest_neighbor_build()` |
-| Local search | `_improve` | `detail::two_opt_improve()` |
-| Exact | `_solve` | `detail::held_karp_solve()` |
-| Metaheuristic | `_search` | `detail::simulated_annealing_search()` |
+| Variant namespace | `snake_case` | `time_windows`, `service_times` |
+| Variant struct | `PascalCase` | `Strict`, `Relaxed`, `ServiceTimes` |
+| Dimension struct | `PascalCase` | `RouteTiming`, `RouteLoad` |
 
 If cache abbreviations ever conflict, use a longer form (e.g. `OrOptCache` instead of `OOCache`).
 
 ## Benchmark requirements
 
-Every new algorithm must be [registered in the algorithm registry](#step-5-register-in-the-algorithm-registry). The benchmark runner picks it up automatically (see [BENCHMARKING.md](BENCHMARKING.md)). Include results in the PR description:
+Every new algorithm must be [registered in the algorithm registry](#step-6-register-in-the-algorithm-registry). The benchmark runner picks it up automatically (see [BENCHMARKING.md](BENCHMARKING.md)). Include results in the PR description:
 
 **Constructive heuristic**: run on Tier 2 + 3. Report mean gap, max gap, and time.
 
@@ -389,10 +348,11 @@ Every new algorithm must be [registered in the algorithm registry](#step-5-regis
 
 - Comments in English.
 - No external dependencies. Standard library only.
-- Use `std::span` for buffer parameters in `detail::` functions.
+- Use `std::span` for buffer parameters.
 - Prefer `static_cast` over C-style casts.
+- All `assert()` must include descriptive messages.
 - Match the existing code style (naming, indentation, const-correctness).
-- Every algorithm header must start with a reference block. Cite the original paper and any subsequent improvements, whether from a paper or a contributor:
+- Every algorithm header must start with a reference block:
 
     ```cpp
     // Lin-Kernighan heuristic

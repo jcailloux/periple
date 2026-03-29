@@ -4,91 +4,160 @@ Periple's callback architecture lets you customize algorithm behavior without mo
 
 ## Two kinds of callbacks
 
-- **Variant callbacks** describe the *problem* (constraints, adjusted costs, state tracking). Example: TSPTW time windows.
-- **Strategy callbacks** define the *algorithm* inside a generic framework (which city to append, how to bound, etc.). Example: nearest-city selection.
+- **Variant callbacks** describe the *problem* (constraints, adjusted costs, state tracking). Example: time windows, service times.
+- **Strategy callbacks** define the *algorithm* inside a generic framework (which city to append next). Example: nearest-city selection.
 
-Ready-to-use algorithms (`nearest_neighbor`, future `two_opt`) have a built-in strategy and only accept variant callbacks. Generic frameworks (`greedy_construct`, future `branch_and_bound`) take a strategy and optionally variant callbacks, which the framework forwards to the strategy.
+Ready-to-use algorithms (`nearest_neighbor`, `held_karp`) have a built-in strategy and only accept variant callbacks. Generic frameworks (`greedy_construct`) take a strategy and optionally variant callbacks via the Solver's second template parameter.
 
 Both use the same mechanism: structs with member functions detected via `if constexpr` + `requires`.
 
 ## Variant callbacks
 
-### `tour_cost` (Solver-level)
+A variant is a struct that provides any combination of two callbacks:
 
-Computes the cost of a complete tour. Set as the second template parameter of `Solver`. If absent (`DefaultTourCost`), the default is the sum of edge distances.
+### `move_prepare`
+
+Adjusts the evaluation context before scoring. Writes to `ctx.cost_delta` and/or dimension fields. Called once per candidate evaluation and once per committed placement.
+
+Two forms, detected by `if constexpr`:
 
 ```cpp
-struct MyTourCost {
-    template <periple::DistanceSource Dist>
-    auto operator()(const Dist& dist,
-                    std::span<const typename periple::dist_traits<Dist>::city_type> tour) const
-        -> typename periple::dist_traits<Dist>::cost_type;
-};
+// With context (accesses dimensions, cost_delta, tour, position, cost)
+template <typename Ctx>
+void move_prepare(const AppendMove<std::size_t>& m, Ctx& ctx) const {
+    ctx.cost_delta += penalty;
+    ctx.template dim<RouteTiming>().departure += service_time;
+}
 
-periple::Solver solver(matrix, MyTourCost{});
+// Without context (stateless adjustment based on move alone)
+void move_prepare(const AppendMove<std::size_t>& m) const;
 ```
 
 ### `move_filter`
 
-Hard constraint. Return `false` to reject a move. If absent, all moves are accepted.
+Hard constraint. Return `false` to reject a move. Called after `move_prepare` so that filters can read the final dimension state. If absent, all moves are accepted.
+
+Two forms:
 
 ```cpp
-bool move_filter(std::span<const city_type> tour, const AppendMove<city_type>& m) const;
+// With context (reads dimensions after prepare pipeline)
+template <typename Ctx>
+bool move_filter(const AppendMove<std::size_t>& m, const Ctx& ctx) const {
+    return ctx.template dim<RouteTiming>().arrival <= deadline;
+}
+
+// Without context (decision based on move alone)
+bool move_filter(const AppendMove<std::size_t>& m) const {
+    return m.city != forbidden_city;
+}
 ```
 
-### `move_eval`
+### Pipeline
 
-Adjusted cost of a move. Replaces distance when it is insufficient (e.g., distance + penalty). If absent, the raw distance is used.
+For each candidate city, the Solver runs:
 
-```cpp
-auto move_eval(std::span<const city_type> tour, const AppendMove<city_type>& m) const -> cost_type;
+```
+1. ctx.init(move, dist, tour, position, cost)   -- initialize dimensions
+2. invoke_prepare(variant, move, ctx)            -- adjust cost_delta and dimensions
+3. invoke_filter(variant, move, ctx)             -- check feasibility
+4. score = dist(last, city) + ctx.cost_delta     -- final score
 ```
 
-### `move_score`
-
-Biased scoring for search guidance (GLS, diversification). Used for selection decisions but does NOT affect cost tracking. If absent, `move_eval` is used (or distance if `move_eval` is also absent).
-
-```cpp
-auto move_score(std::span<const city_type> tour, const AppendMove<city_type>& m) const -> cost_type;
-```
-
-### `on_commit`
-
-Called after a move is applied. Use it to update caches (arrival times, load sums, etc.).
-
-```cpp
-void on_commit(std::span<const city_type> tour, const AppendMove<city_type>& m) const;
-```
-
-### `on_improve`
-
-Called when a DP transition yields a new best for a state. Use it to maintain auxiliary state (arrival times, accumulated fatigue, etc.) alongside the DP table.
-
-```cpp
-void on_improve(const DPMove<city_type, cost_type>& m) const;
-```
-
-### Priority rules
-
-| `move_score` | `move_eval` | Selection | Cost tracking |
-|---|---|---|---|
-| absent | absent | distance | distance |
-| absent | present | `move_eval` | `move_eval` |
-| present | absent | `move_score` | distance |
-| present | present | `move_score` | `move_eval` |
+`invoke_prepare` and `invoke_filter` are dispatch helpers that detect callback presence and form (with/without context) via `if constexpr`.
 
 ## Move types
 
-Each algorithm family defines its own move types. Variant callbacks are overloaded per move type.
+Each algorithm family defines its own move types. Variant callbacks provide overloads per move type. Both have a single template parameter (`CityT`).
 
 | Move type | Algorithm family | Fields |
 |---|---|---|
-| `AppendMove<CityT>` | Constructive | `city` |
-| `DPMove<CityT, CostT>` | Exact (HK) | `from`, `to`, `cost`, `distance`, `set` |
+| `AppendMove<CityT>` | Constructive (NN, greedy) + closing edge + replay | `city` |
+| `DPMove<CityT>` | Exact (Held-Karp) | `from`, `to`, `set` |
 
-`DPMove` fields: `from` and `to` are the cities, `cost` is the cumulative DP cost at `from` (after move_eval adjustments), `distance` is the raw `dist(from, to)`, and `set` is the bitmask of visited cities (includes `from`, excludes `to`). The variant callback can maintain auxiliary state indexed by `(set, city)`.
+`DPMove::set` is a bitmask of visited cities (includes `from`, excludes `to`).
 
-Future: `TwoOptMove`, `OrOptMove`, `DoubleBridgeMove`.
+A variant supporting both constructive and exact algorithms provides overloads for both:
+
+```cpp
+struct MyVariant {
+    template <typename CityT, typename Ctx>
+    void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const { /* ... */ }
+
+    template <typename CityT, typename Ctx>
+    void move_prepare(const DPMove<CityT>& m, Ctx& ctx) const { /* ... */ }
+};
+```
+
+## EvalContext
+
+The evaluation context carries read-only solver state and mutable dimensions. It is created automatically by the Solver based on the variant's `dimension` typedef.
+
+**Read-only** (set by `init`, not modifiable by callbacks):
+- `ctx.tour()` -- current partial tour
+- `ctx.position()` -- inverse index (city -> position)
+- `ctx.cost()` -- current accumulated cost
+
+**Mutable**:
+- `ctx.cost_delta` -- additive adjustment to the move's score (`double`, always)
+- `ctx.template dim<D>()` -- access dimension `D` (e.g., `RouteTiming`)
+
+### Dimensions
+
+A dimension is typed state that persists across the tour construction. It tracks tentative values (for evaluation) and committed values (for the tour built so far).
+
+A variant declares its dimension(s) via a `dimension` typedef:
+
+```cpp
+struct MyVariant {
+    using dimension = RouteTiming;                          // single dimension
+    // or:
+    using dimension = periple::Dimensions<RouteTiming, RouteEnergy>;  // multiple
+};
+```
+
+If the variant has no `dimension` typedef, the Solver uses `EmptyContext` (no dimensions, just `cost_delta`).
+
+`RouteTiming` is the built-in dimension provided by Periple. It tracks `arrival` and `departure` times per position (constructive) or per `(set, city)` state (DP).
+
+### context_for deduction
+
+The Solver deduces the context type automatically:
+
+| Variant | Context |
+|---|---|
+| `NoCallbacks` | `EmptyContext<CityT, CostT>` |
+| `using dimension = T` | `EvalContext<CityT, CostT, T>` |
+| `using dimension = Dimensions<Ts...>` | `EvalContext<CityT, CostT, Ts...>` |
+
+## Composition
+
+Multiple variants can be combined via `Composed`:
+
+```cpp
+auto svc = service_times::ServiceTimes(durations);
+auto tw = time_windows::Strict(windows);
+auto variant = Composed(svc, tw);
+Solver solver(matrix, variant);
+```
+
+`Composed<Vs...>`:
+- Pipelines `move_prepare` through all variants in order (fold)
+- AND-short-circuits `move_filter` through all variants in order
+- Merges and deduplicates dimensions from all variants
+
+Convention: place adjusters (ServiceTimes) before verifiers (Strict) so that filters see the adjusted state.
+
+> **Important**: `Composed` stores pointers to the composed variants. The variant objects must outlive the `Composed` instance. Always use named variables, not temporaries:
+> ```cpp
+> // Correct:
+> auto variant = Composed(svc, tw);
+> Solver solver(mat, variant);
+>
+> // Wrong (dangling pointer):
+> Solver solver(mat, Composed(svc, tw));  // Composed destroyed at end of expression
+> ```
+
+See [VARIANTS.md](VARIANTS.md) for pre-built variants and composition examples.
 
 ## Strategy callbacks
 
@@ -98,67 +167,46 @@ Builds a tour one city at a time. The strategy decides which city to append next
 
 **Required**: `select_next` returning `std::optional<city_type>`. Return `std::nullopt` to stop construction (the tour remains partial).
 
-**Optional**: `on_placed`, called after each city is placed in the tour buffer.
-
-Both methods exist in two forms: a 3-argument form that ignores variant callbacks, and a 4-argument form that receives them. If variant callbacks are passed to `greedy_construct`, the framework forwards them to whichever form the strategy provides:
+The strategy receives a const reference to the Solver, giving access to `tour()`, `position()`, `is_visited()`, `evaluate()`, and `distance()`:
 
 ```cpp
-// 3-arg: standalone strategy, no variant callbacks needed
 struct FarthestSelector {
-    template <periple::DistanceSource Dist>
-    auto select_next(const Dist& dist,
-                     std::span<const city_type> partial_tour,
-                     std::span<const uint8_t> visited) const
-        -> std::optional<city_type>;
+    template <periple::DistanceSource Dist, typename Variant>
+    auto select_next(const periple::Solver<Dist, Variant>& solver) const
+        -> std::optional<typename periple::dist_traits<Dist>::city_type>
+    {
+        // Use solver.evaluate(city), solver.distance(a, b), etc.
+    }
 };
 
 solver.greedy_construct(FarthestSelector{});
 ```
 
-```cpp
-// 4-arg: strategy that uses variant callbacks
-struct ConstrainedSelector {
-    template <periple::DistanceSource Dist, typename Variant>
-    auto select_next(const Dist& dist,
-                     std::span<const city_type> partial_tour,
-                     std::span<const uint8_t> visited,
-                     const Variant& variant) const
-        -> std::optional<city_type>
-    {
-        // variant.move_filter(), variant.move_eval(), etc.
-    }
-};
-
-solver.greedy_construct(ConstrainedSelector{}, tw_strict);
-```
-
 ### `NearestSelector`
 
-Built-in strategy for `greedy_construct`. Iterates unvisited cities, applies `move_filter` (if present), scores via `move_score > move_eval > dist`, picks the minimum, and delegates `on_commit` through `on_placed`. This is what `nearest_neighbor()` uses internally.
-
-Without variant callbacks, it scores by raw distance.
+Built-in strategy for `greedy_construct`. Iterates unvisited cities, calls `solver.evaluate()` (which runs the full variant pipeline: init -> prepare -> filter -> score), and picks the minimum. This is what `nearest_neighbor()` uses internally.
 
 ```cpp
 // These are equivalent:
-solver.nearest_neighbor(tw, {.start_city = 0});
-solver.greedy_construct(periple::NearestSelector{}, tw, {.start_city = 0});
+solver.nearest_neighbor({.start_city = 0});
+solver.greedy_construct(periple::NearestSelector{}, {.start_city = 0});
 ```
 
 ## Partial tours
 
-`set_tour` accepts a prefix shorter than the full problem size:
+`set_tour` accepts a prefix shorter than the full problem size. Algorithms can resume from a partial tour:
 
 ```cpp
 std::vector<std::size_t> prefix = {0, 3, 7};
-solver.set_tour(prefix);                    // status = partial
-solver.nearest_neighbor();                  // completes from the prefix
+solver.set_tour(prefix);                                   // status = partial
+solver.nearest_neighbor({.resume_at = solver.tour().size()});  // completes from the prefix
 ```
 
-When continuing from a partial tour, `on_commit` is only called for newly placed cities. If your variant callbacks maintain state (like arrival times), ensure they are consistent with the existing prefix before calling the algorithm.
+When resuming, `rebuild_and_cost` replays the prefix through the full pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. No manual state management is needed.
 
 ## Variant callbacks and symmetry
 
-Symmetry is a property of the **full problem** (distance matrix + variant callbacks), not of the distance matrix alone. Variant callbacks can break symmetry even on a symmetric matrix (e.g., direction-dependent costs), or restore it on an asymmetric one.
+Symmetry is a property of the **full problem** (distance matrix + variant callbacks), not of the distance matrix alone. Variant callbacks can break symmetry even on a symmetric matrix (e.g., direction-dependent time windows).
 
 Use `set_symmetric` to declare the effective symmetry. In debug builds, `set_symmetric(true)` asserts that the distance matrix is symmetric. Use `set_symmetric(true, periple::unchecked)` to skip this check.
 
@@ -170,12 +218,12 @@ solver.set_symmetric(true, periple::unchecked);   // trust me, skip check
 
 ## Applicability
 
-| Family | `tour_cost` | `move_filter` | `move_eval` | `move_score` | `on_commit` | `on_improve` |
-|---|---|---|---|---|---|---|
-| Constructive (NN) | yes | yes | yes | yes | yes | - |
-| Exact (HK) | yes | yes | yes | - | - | yes |
-| Local search (future) | yes | yes | yes | yes | yes | - |
+| Family | `move_prepare` | `move_filter` |
+|---|---|---|
+| Constructive (NN, greedy) | yes | yes |
+| Exact (Held-Karp) | yes | yes |
+| Local search (future) | yes | yes |
 
 ## Variants
 
-Pre-built variant callbacks for common TSP variants (TSPTW, etc.) are documented in [VARIANTS.md](VARIANTS.md).
+Pre-built variant callbacks for common TSP variants are documented in [VARIANTS.md](VARIANTS.md).
