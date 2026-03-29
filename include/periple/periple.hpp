@@ -10,6 +10,7 @@
 #include <periple/distance/functions.hpp>
 #include <periple/distance/jonker_volgenant.hpp>
 #include <periple/distance/matrix.hpp>
+#include <periple/variants/service_times.hpp>
 #include <periple/algorithms/greedy_construct.hpp>
 #include <periple/algorithms/nearest_neighbor.hpp>
 #include <periple/algorithms/held_karp.hpp>

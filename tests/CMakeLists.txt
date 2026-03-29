@@ -21,4 +21,8 @@ target_link_libraries(test_callbacks PRIVATE periple::periple)
 target_include_directories(test_callbacks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME callbacks COMMAND test_callbacks)
 
+add_executable(test_composed test_composed.cpp)
+target_link_libraries(test_composed PRIVATE periple::periple)
+add_test(NAME composed COMMAND test_composed)
+
 add_subdirectory(algorithms)

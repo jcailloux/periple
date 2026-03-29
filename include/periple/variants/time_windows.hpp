@@ -137,8 +137,8 @@ struct Strict {
 	template <typename CityT, typename Ctx>
 	void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const {
 		auto ws = windows_of(m.city);
-		double dep = detail::departure_time(ws, ctx.template dim<RouteTiming>().arrival);
-		ctx.template dim<RouteTiming>().departure = dep;
+		double arr = ctx.template dim<RouteTiming>().arrival;
+		ctx.template dim<RouteTiming>().departure += detail::departure_time(ws, arr) - arr;
 	}
 
 	template <typename CityT, typename Ctx>
@@ -151,8 +151,8 @@ struct Strict {
 	template <typename CityT, typename Ctx>
 	void move_prepare(const DPMove<CityT>& m, Ctx& ctx) const {
 		auto ws = windows_of(m.to);
-		double dep = detail::departure_time(ws, ctx.template dim<RouteTiming>().arrival);
-		ctx.template dim<RouteTiming>().departure = dep;
+		double arr = ctx.template dim<RouteTiming>().arrival;
+		ctx.template dim<RouteTiming>().departure += detail::departure_time(ws, arr) - arr;
 	}
 
 	template <typename CityT, typename Ctx>
@@ -191,8 +191,7 @@ struct Relaxed {
 	void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const {
 		auto ws = windows_of(m.city);
 		double arr = ctx.template dim<RouteTiming>().arrival;
-		double dep = detail::departure_time(ws, arr);
-		ctx.template dim<RouteTiming>().departure = dep;
+		ctx.template dim<RouteTiming>().departure += detail::departure_time(ws, arr) - arr;
 		double violation = detail::violation_amount(ws, arr);
 		if (violation > 0.0)
 			ctx.cost_delta += penalty_weight_ * violation;
@@ -204,8 +203,7 @@ struct Relaxed {
 	void move_prepare(const DPMove<CityT>& m, Ctx& ctx) const {
 		auto ws = windows_of(m.to);
 		double arr = ctx.template dim<RouteTiming>().arrival;
-		double dep = detail::departure_time(ws, arr);
-		ctx.template dim<RouteTiming>().departure = dep;
+		ctx.template dim<RouteTiming>().departure += detail::departure_time(ws, arr) - arr;
 		double violation = detail::violation_amount(ws, arr);
 		if (violation > 0.0)
 			ctx.cost_delta += penalty_weight_ * violation;
