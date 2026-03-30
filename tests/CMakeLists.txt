@@ -25,4 +25,10 @@ add_executable(test_composed test_composed.cpp)
 target_link_libraries(test_composed PRIVATE periple::periple)
 add_test(NAME composed COMMAND test_composed)
 
+add_executable(test_replay test_replay.cpp)
+target_link_libraries(test_replay PRIVATE periple::periple)
+target_compile_definitions(test_replay PRIVATE PERIPLE_TESTING)
+target_include_directories(test_replay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME replay COMMAND test_replay)
+
 add_subdirectory(algorithms)
