@@ -3,6 +3,7 @@
 #include <periple/core/solver.hpp>
 
 #include <cstddef>
+#include <span>
 
 namespace periple {
 
@@ -18,6 +19,10 @@ public:
 					s_.position_[static_cast<std::size_t>(s_.tour_[i])]) != i)
 				return false;
 		return true;
+	}
+
+	auto cumul_costs() const -> std::span<const typename Solver<Dist, Variant>::cost_type> {
+		return {s_.cumul_costs_.data(), s_.n_};
 	}
 
 private:

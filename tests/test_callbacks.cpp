@@ -63,15 +63,15 @@ void test_protocol_nn_logging() {
 	// Step 1 (from city 0): 3 candidates -> 3x(prepare+filter), 1x append prepare
 	// Step 2 (from city 1): 2 candidates -> 2x(prepare+filter), 1x append prepare
 	// Step 3 (from city 3): 1 candidate  -> 1x(prepare+filter), 1x append prepare
-	// Plus: start city append = 1x prepare, closing edge = 1x prepare
-	// move_filter: 3+2+1 = 6
+	// Plus: start city append = 1x prepare, closing edge = 1x(prepare+filter)
+	// move_filter: 3+2+1 + 1(closing) = 7
 	// move_prepare: 1(start) + 3+1 + 2+1 + 1+1 + 1(closing) = 11
 	std::size_t filter_count = 0, prepare_count = 0;
 	for (const auto& entry : cb.log) {
 		if (entry == "move_filter") ++filter_count;
 		else if (entry == "move_prepare") ++prepare_count;
 	}
-	assert(filter_count == 6 && "expected 6 move_filter calls (3+2+1 candidates)");
+	assert(filter_count == 7 && "expected 7 move_filter calls (3+2+1 candidates + 1 closing)");
 	assert(prepare_count == 11 && "expected 11 move_prepare calls");
 }
 

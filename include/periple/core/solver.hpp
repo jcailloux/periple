@@ -57,6 +57,8 @@ public:
 	using city_type = typename dist_traits<Dist>::city_type;
 	using context_type = typename context_for<Variant, city_type, cost_type>::type;
 
+	static constexpr bool has_callbacks = !std::is_same_v<Variant, NoCallbacks>;
+
 	// --- Lifecycle ----------------------------------------------------------
 
 	Solver() = default;
@@ -122,7 +124,7 @@ private:
 	void invalidate_caches();
 	void check_symmetry() const;
 	auto rebuild_and_cost(std::span<const city_type> t) -> cost_type;
-	void finalize_closing_edge();
+	void close_tour();
 
 	auto variant_ref() const -> const Variant& {
 		if constexpr (std::is_same_v<Variant, NoCallbacks>) {
@@ -132,6 +134,11 @@ private:
 			assert(variant_ && "variant_ref: no variant set on solver");
 			return *variant_;
 		}
+	}
+
+	// Adjusted edge cost: raw distance + variant's cost_delta (set by prepare).
+	auto edge_delta(city_type from, city_type to) const -> double {
+		return static_cast<double>((*dist_)(from, to)) + ctx_.cost_delta;
 	}
 
 	// State
@@ -149,6 +156,7 @@ private:
 	std::vector<uint8_t>   dont_look_;
 	std::vector<city_type> neighbors_;
 	std::size_t            neighbors_k_ = 0;
+	std::vector<cost_type> cumul_costs_;  // Cumulative cost at each tour position.
 
 	// Evaluation context (mutable: evaluate() is const)
 	mutable context_type ctx_;
@@ -297,6 +305,7 @@ void Solver<Dist, Variant>::ensure_capacity(std::size_t n) {
 	if (tour_.size()     < n) tour_.resize(n);
 	if (position_.size() < n) position_.resize(n);
 	if (visited_.size()  < n) visited_.resize(n);
+	if (cumul_costs_.size() < n) cumul_costs_.resize(n);
 	ctx_.resize(n);
 }
 
@@ -396,10 +405,11 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 		invoke_prepare(variant_ref(), move, ctx_);
 
 		if (i > 0)
-			total_cost += static_cast<cost_type>(static_cast<double>((*dist_)(t[i - 1], t[i])) + ctx_.cost_delta);
+			total_cost += static_cast<cost_type>(edge_delta(t[i - 1], t[i]));
 
 		ctx_.commit(move);
 		position_[static_cast<std::size_t>(t[i])] = static_cast<city_type>(i);
+		cumul_costs_[i] = total_cost;
 	}
 
 	// Closing edge (complete tour only).
@@ -407,21 +417,29 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 		AppendMove<city_type> closing{t[0]};
 		ctx_.init(closing, *dist_, {t.data(), t.size()}, {position_.data(), t.size()}, total_cost);
 		invoke_prepare(variant_ref(), closing, ctx_);
-		total_cost += static_cast<cost_type>(static_cast<double>((*dist_)(t.back(), t[0])) + ctx_.cost_delta);
+		total_cost += static_cast<cost_type>(edge_delta(t.back(), t[0]));
 	}
 
 	return total_cost;
 }
 
-// --- finalize_closing_edge --------------------------------------------------
+// --- close_tour -------------------------------------------------------------
 
 template <DistanceSource Dist, typename Variant>
-void Solver<Dist, Variant>::finalize_closing_edge() {
-	if (n_ <= 1) return;
+void Solver<Dist, Variant>::close_tour() {
+	if (n_ <= 1) {
+		status_ = SolutionStatus::feasible;
+		return;
+	}
 	AppendMove<city_type> closing{tour_[0]};
 	ctx_.init(closing, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
 	invoke_prepare(variant_ref(), closing, ctx_);
-	cost_ += static_cast<cost_type>(static_cast<double>((*dist_)(tour_[n_ - 1], tour_[0])) + ctx_.cost_delta);
+	if (!invoke_filter(variant_ref(), closing, ctx_)) {
+		status_ = SolutionStatus::infeasible;
+		return;
+	}
+	cost_ += static_cast<cost_type>(edge_delta(tour_[n_ - 1], tour_[0]));
+	status_ = SolutionStatus::feasible;
 }
 
 // --- Evaluation -------------------------------------------------------------
@@ -437,7 +455,7 @@ auto Solver<Dist, Variant>::evaluate(city_type city) const -> std::optional<doub
 	if (!invoke_filter(variant_ref(), move, ctx_))
 		return std::nullopt;
 
-	return static_cast<double>((*dist_)(tour_[n_ - 1], city)) + ctx_.cost_delta;
+	return edge_delta(tour_[n_ - 1], city);
 }
 
 // --- Construction primitives ------------------------------------------------
@@ -458,18 +476,18 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 	invoke_prepare(variant_ref(), move, ctx_);
 
 	if (n_ > 0)
-		cost_ += static_cast<cost_type>(static_cast<double>((*dist_)(tour_[n_ - 1], city)) + ctx_.cost_delta);
+		cost_ += static_cast<cost_type>(edge_delta(tour_[n_ - 1], city));
 
 	tour_[n_] = city;
 	visited_[static_cast<std::size_t>(city)] = 1;
 	position_[static_cast<std::size_t>(city)] = static_cast<city_type>(n_);
+	cumul_costs_[n_] = cost_;
 	++n_;
 
 	ctx_.commit(move);
 
 	if (n_ == total) {
-		finalize_closing_edge();
-		status_ = SolutionStatus::feasible;
+		close_tour();
 	} else {
 		status_ = SolutionStatus::partial;
 	}
