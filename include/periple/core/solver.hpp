@@ -97,6 +97,14 @@ public:
 	// Does not modify observable solver state (writes to mutable ctx_).
 	[[nodiscard]] auto evaluate(city_type city) const -> std::optional<double>;
 
+	// Evaluates a proposed complete tour by replaying AppendMove from from_pos
+	// onward. Returns the total tour cost if feasible, or nullopt if any
+	// position is rejected by move_filter.
+	// The prefix [0..from_pos) must be identical to the current tour.
+	// Committed dimension state for [from_pos..n) is overwritten by the replay.
+	// Does not modify tour_, position_, cost_, or n_.
+	[[nodiscard]] auto evaluate_replay(std::span<const city_type> proposed, std::size_t from_pos) const -> std::optional<cost_type>;
+
 	// --- Construction primitives --------------------------------------------
 
 	auto append(city_type city) -> Solver&;
@@ -515,6 +523,44 @@ auto Solver<Dist, Variant>::try_trivial() -> bool {
 		return true;
 	}
 	return false;
+}
+
+// --- Replay-based evaluation ------------------------------------------------
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::evaluate_replay(
+    std::span<const city_type> proposed,
+    std::size_t from_pos) const -> std::optional<cost_type>
+{
+	assert(dist_ && "evaluate_replay: no distance source set");
+	assert(n_ == dist_->size() && "evaluate_replay: solver must have a complete tour");
+	assert(proposed.size() == n_ && "evaluate_replay: proposed tour size must match");
+	assert(from_pos >= 1 && from_pos < n_ && "evaluate_replay: from_pos out of range");
+
+	const auto& variant = variant_ref();
+	cost_type running_cost = cumul_costs_[from_pos - 1];
+
+	// Replay the divergent suffix. Committed dimension state at from_pos - 1
+	// is correct (shared prefix). Each init reads departures[i-1] and propagates.
+	for (std::size_t i = from_pos; i < n_; ++i) {
+		AppendMove<city_type> move{proposed[i]};
+		ctx_.init(move, *dist_, {proposed.data(), i}, {position_.data(), i}, running_cost);
+		invoke_prepare(variant, move, ctx_);
+		if (!invoke_filter(variant, move, ctx_))
+			return std::nullopt;
+		running_cost += static_cast<cost_type>(edge_delta(proposed[i - 1], proposed[i]));
+		ctx_.commit(move);
+	}
+
+	// Closing edge.
+	AppendMove<city_type> closing{proposed[0]};
+	ctx_.init(closing, *dist_, {proposed.data(), n_}, {position_.data(), n_}, running_cost);
+	invoke_prepare(variant, closing, ctx_);
+	if (!invoke_filter(variant, closing, ctx_))
+		return std::nullopt;
+	running_cost += static_cast<cost_type>(edge_delta(proposed[n_ - 1], proposed[0]));
+
+	return running_cost;
 }
 
 // --- Tour import with known cost --------------------------------------------
