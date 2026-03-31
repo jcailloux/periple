@@ -10,7 +10,7 @@
 // - invoke_prepare / invoke_filter: dispatch to variant callbacks
 
 #include <periple/core/traits.hpp>
-#include <periple/core/moves.hpp>
+#include <periple/core/moves/append_move.hpp>
 
 #include <algorithm>
 #include <cstddef>

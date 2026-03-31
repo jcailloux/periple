@@ -6,6 +6,7 @@
 // Uses the RouteTiming dimension to adjust departure after arrival.
 
 #include <periple/core/dimensions/route_timing.hpp>
+#include <periple/core/moves/dp_move.hpp>
 
 #include <cassert>
 #include <cstddef>

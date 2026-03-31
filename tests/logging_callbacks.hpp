@@ -1,6 +1,6 @@
 #pragma once
 
-#include <periple/core/moves.hpp>
+#include <periple/core/moves/append_move.hpp>
 
 #include <string>
 #include <vector>

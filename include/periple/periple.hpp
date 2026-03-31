@@ -1,7 +1,9 @@
 #pragma once
 
 #include <periple/core/traits.hpp>
-#include <periple/core/moves.hpp>
+#include <periple/core/moves/append_move.hpp>
+#include <periple/core/moves/dp_move.hpp>
+#include <periple/core/moves/two_opt_move.hpp>
 #include <periple/core/dimensions.hpp>
 #include <periple/core/dimensions/route_timing.hpp>
 #include <periple/core/composed.hpp>

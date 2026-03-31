@@ -5,6 +5,7 @@
 // Savelsbergh (1985), "Local Search in Routing Problems with Time Windows"
 
 #include <periple/core/dimensions/route_timing.hpp>
+#include <periple/core/moves/dp_move.hpp>
 
 #include <algorithm>
 #include <cassert>

@@ -6,6 +6,7 @@
 // Held, Karp (1962), "A Dynamic Programming Approach to Sequencing Problems"
 
 #include <periple/core/solver.hpp>
+#include <periple/core/moves/dp_move.hpp>
 
 #include <bit>
 #include <limits>

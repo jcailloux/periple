@@ -9,6 +9,7 @@
 // state) and exact DP algorithms (DPMove, per-(set,city) committed state).
 
 #include <periple/core/dimensions.hpp>
+#include <periple/core/moves/dp_move.hpp>
 
 #include <cstddef>
 #include <vector>
