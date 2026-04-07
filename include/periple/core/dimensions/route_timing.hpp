@@ -8,7 +8,8 @@
 // Supports both constructive algorithms (AppendMove, per-position committed
 // state) and exact DP algorithms (DPMove, per-(set,city) committed state).
 
-#include <periple/core/dimensions.hpp>
+#include <periple/core/staged_vector.hpp>
+#include <periple/core/traits.hpp>
 #include <periple/core/moves/dp_move.hpp>
 
 #include <cstddef>
@@ -22,39 +23,42 @@ struct RouteTiming {
 	double departure = 0;
 	std::size_t pos_ = 0;
 
-	// Committed constructive (per-position)
-	std::vector<double> arrivals;
-	std::vector<double> departures;
+	// Committed constructive (per-position, staged for non-destructive eval)
+	// Only departures are stored: arrival is always derived in init from
+	// departures[pos-1] + travel. This is the sole propagating state.
+	StagedVector<double> departures;
 
 	// Committed DP (per-(set,city), allocated lazily on first DPMove init)
-	std::vector<double> dp_arrivals;
 	std::vector<double> dp_departures;
 	std::size_t dp_n_ = 0;
 
-	void resize(std::size_t n) { arrivals.resize(n); departures.resize(n); }
-	void reset() {
-		std::fill(arrivals.begin(), arrivals.end(), 0.0);
-		std::fill(departures.begin(), departures.end(), 0.0);
-	}
+	void resize(std::size_t n) { departures.resize(n); }
+	void reset() { departures.fill(0.0); }
+
+	// --- Staging lifecycle ---------------------------------------------------
+
+	void begin_staging(std::size_t from) { departures.begin_staging(from); }
+	void discard_staging() { departures.discard_staging(); }
+	void save_staging(std::size_t to) { departures.save_staging(to); }
+	void commit_staging(std::size_t to) { departures.commit(to); }
 
 	// --- AppendMove (constructive) ----------------------------------------
 
-	template <DistanceSource Dist, typename CityT, typename Ctx>
-	void init(const AppendMove<CityT>& m, const Dist& dist, const Ctx& ctx) {
-		pos_ = ctx.tour().size();
+	template <DistanceSource Dist, typename CityT>
+	void init(const AppendMove<CityT>& m, const Dist& dist) {
+		pos_ = m.pos;
 		if (pos_ == 0) {
 			arrival = 0.0;
 			departure = 0.0;
 		} else {
 			arrival = departures[pos_ - 1]
-				+ static_cast<double>(dist(ctx.tour().back(), m.city));
+				+ static_cast<double>(dist(m.prev_city, m.city));
 			departure = arrival;
 		}
 	}
 
 	template <typename CityT>
 	void commit(const AppendMove<CityT>&) {
-		arrivals[pos_] = arrival;
 		departures[pos_] = departure;
 	}
 
@@ -72,9 +76,8 @@ struct RouteTiming {
 
 	template <DistanceSource Dist, typename CityT>
 	void init(const DPMove<CityT>& m, const Dist& dist) {
-		if (dp_arrivals.empty()) {
+		if (dp_departures.empty()) {
 			dp_n_ = dist.size();
-			dp_arrivals.resize(dp_n_ * (std::size_t{1} << dp_n_));
 			dp_departures.resize(dp_n_ * (std::size_t{1} << dp_n_));
 		}
 		std::size_t idx = m.set * dp_n_ + static_cast<std::size_t>(m.from);
@@ -86,7 +89,6 @@ struct RouteTiming {
 	void commit(const DPMove<CityT>& m) {
 		std::size_t new_set = m.set | (std::size_t{1} << static_cast<std::size_t>(m.to));
 		std::size_t idx = new_set * dp_n_ + static_cast<std::size_t>(m.to);
-		dp_arrivals[idx] = arrival;
 		dp_departures[idx] = departure;
 	}
 };
