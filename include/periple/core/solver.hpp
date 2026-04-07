@@ -97,13 +97,21 @@ public:
 	// Does not modify observable solver state (writes to mutable ctx_).
 	[[nodiscard]] auto evaluate(city_type city) const -> std::optional<double>;
 
-	// Evaluates a proposed complete tour by replaying AppendMove from from_pos
-	// onward. Returns the total tour cost if feasible, or nullopt if any
-	// position is rejected by move_filter.
-	// The prefix [0..from_pos) must be identical to the current tour.
-	// Committed dimension state for [from_pos..n) is overwritten by the replay.
-	// Does not modify tour_, position_, cost_, or n_.
-	[[nodiscard]] auto evaluate_replay(std::span<const city_type> proposed, std::size_t from_pos) const -> std::optional<cost_type>;
+	// Evaluates a proposed tour by replaying AppendMove from from_pos onward.
+	// Returns the total tour cost if feasible, or nullopt if any move_filter
+	// rejects. Uses staged dimension buffers (non-destructive).
+	template <typename CityFn>
+	[[nodiscard]] auto evaluate_replay(CityFn&& city_at, std::size_t from_pos,
+	                                   cost_type prefix_cost) const -> std::optional<cost_type>;
+
+	[[nodiscard]] auto evaluate_replay(std::span<const city_type> proposed, std::size_t from_pos, cost_type prefix_cost) const
+	    -> std::optional<cost_type>;
+
+	// Staging lifecycle for local search.
+	void save_staging() const;
+
+	template <typename CityFn>
+	void accept_replay(CityFn&& city_at, std::size_t from_pos, cost_type new_cost);
 
 	// --- Construction primitives --------------------------------------------
 
@@ -164,7 +172,6 @@ private:
 	std::vector<uint8_t>   dont_look_;
 	std::vector<city_type> neighbors_;
 	std::size_t            neighbors_k_ = 0;
-	std::vector<cost_type> cumul_costs_;  // Cumulative cost at each tour position.
 
 	// Evaluation context (mutable: evaluate() is const)
 	mutable context_type ctx_;
@@ -313,7 +320,6 @@ void Solver<Dist, Variant>::ensure_capacity(std::size_t n) {
 	if (tour_.size()     < n) tour_.resize(n);
 	if (position_.size() < n) position_.resize(n);
 	if (visited_.size()  < n) visited_.resize(n);
-	if (cumul_costs_.size() < n) cumul_costs_.resize(n);
 	ctx_.resize(n);
 }
 
@@ -408,7 +414,7 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 	cost_type total_cost{};
 
 	for (std::size_t i = 0; i < t.size(); ++i) {
-		AppendMove<city_type> move{t[i]};
+		AppendMove<city_type> move{t[i], (i > 0 ? t[i - 1] : city_type{}), i};
 		ctx_.init(move, *dist_, {t.data(), i}, {position_.data(), i}, total_cost);
 		invoke_prepare(variant_ref(), move, ctx_);
 
@@ -417,12 +423,11 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 
 		ctx_.commit(move);
 		position_[static_cast<std::size_t>(t[i])] = static_cast<city_type>(i);
-		cumul_costs_[i] = total_cost;
 	}
 
 	// Closing edge (complete tour only).
 	if (t.size() == dist_->size() && t.size() > 1) {
-		AppendMove<city_type> closing{t[0]};
+		AppendMove<city_type> closing{t[0], t.back(), t.size()};
 		ctx_.init(closing, *dist_, {t.data(), t.size()}, {position_.data(), t.size()}, total_cost);
 		invoke_prepare(variant_ref(), closing, ctx_);
 		total_cost += static_cast<cost_type>(edge_delta(t.back(), t[0]));
@@ -439,7 +444,7 @@ void Solver<Dist, Variant>::close_tour() {
 		status_ = SolutionStatus::feasible;
 		return;
 	}
-	AppendMove<city_type> closing{tour_[0]};
+	AppendMove<city_type> closing{tour_[0], tour_[n_ - 1], n_};
 	ctx_.init(closing, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
 	invoke_prepare(variant_ref(), closing, ctx_);
 	if (!invoke_filter(variant_ref(), closing, ctx_)) {
@@ -457,7 +462,7 @@ auto Solver<Dist, Variant>::evaluate(city_type city) const -> std::optional<doub
 	assert(dist_ && "evaluate: no distance source set");
 	assert(n_ > 0 && "evaluate: tour must have at least one city");
 
-	AppendMove<city_type> move{city};
+	AppendMove<city_type> move{city, tour_[n_ - 1], n_};
 	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
 	invoke_prepare(variant_ref(), move, ctx_);
 	if (!invoke_filter(variant_ref(), move, ctx_))
@@ -479,7 +484,7 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 	if (n_ == 0)
 		std::fill_n(visited_.data(), total, uint8_t{0});
 
-	AppendMove<city_type> move{city};
+	AppendMove<city_type> move{city, (n_ > 0 ? tour_[n_ - 1] : city_type{}), n_};
 	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
 	invoke_prepare(variant_ref(), move, ctx_);
 
@@ -489,7 +494,6 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 	tour_[n_] = city;
 	visited_[static_cast<std::size_t>(city)] = 1;
 	position_[static_cast<std::size_t>(city)] = static_cast<city_type>(n_);
-	cumul_costs_[n_] = cost_;
 	++n_;
 
 	ctx_.commit(move);
@@ -528,39 +532,73 @@ auto Solver<Dist, Variant>::try_trivial() -> bool {
 // --- Replay-based evaluation ------------------------------------------------
 
 template <DistanceSource Dist, typename Variant>
+template <typename CityFn>
 auto Solver<Dist, Variant>::evaluate_replay(
-    std::span<const city_type> proposed,
-    std::size_t from_pos) const -> std::optional<cost_type>
+    CityFn&& city_at, std::size_t from_pos,
+    cost_type prefix_cost) const -> std::optional<cost_type>
 {
 	assert(dist_ && "evaluate_replay: no distance source set");
 	assert(n_ == dist_->size() && "evaluate_replay: solver must have a complete tour");
-	assert(proposed.size() == n_ && "evaluate_replay: proposed tour size must match");
 	assert(from_pos >= 1 && from_pos < n_ && "evaluate_replay: from_pos out of range");
 
-	const auto& variant = variant_ref();
-	cost_type running_cost = cumul_costs_[from_pos - 1];
+	ctx_.begin_staging(from_pos);
 
-	// Replay the divergent suffix. Committed dimension state at from_pos - 1
-	// is correct (shared prefix). Each init reads departures[i-1] and propagates.
+	const auto& variant = variant_ref();
+	cost_type running_cost = prefix_cost;
+
+	auto prev = city_at(from_pos - 1);
 	for (std::size_t i = from_pos; i < n_; ++i) {
-		AppendMove<city_type> move{proposed[i]};
-		ctx_.init(move, *dist_, {proposed.data(), i}, {position_.data(), i}, running_cost);
+		auto city = city_at(i);
+		AppendMove<city_type> move{city, prev, i};
+		ctx_.init(move, *dist_, running_cost);
 		invoke_prepare(variant, move, ctx_);
 		if (!invoke_filter(variant, move, ctx_))
 			return std::nullopt;
-		running_cost += static_cast<cost_type>(edge_delta(proposed[i - 1], proposed[i]));
+		running_cost += static_cast<cost_type>(edge_delta(prev, city));
 		ctx_.commit(move);
+		prev = city;
 	}
 
 	// Closing edge.
-	AppendMove<city_type> closing{proposed[0]};
-	ctx_.init(closing, *dist_, {proposed.data(), n_}, {position_.data(), n_}, running_cost);
+	auto first = city_at(0);
+	AppendMove<city_type> closing{first, prev, n_};
+	ctx_.init(closing, *dist_, running_cost);
 	invoke_prepare(variant, closing, ctx_);
 	if (!invoke_filter(variant, closing, ctx_))
 		return std::nullopt;
-	running_cost += static_cast<cost_type>(edge_delta(proposed[n_ - 1], proposed[0]));
+	running_cost += static_cast<cost_type>(edge_delta(prev, first));
 
 	return running_cost;
+}
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::evaluate_replay(
+    std::span<const city_type> proposed, std::size_t from_pos,
+    cost_type prefix_cost) const -> std::optional<cost_type>
+{
+	assert(proposed.size() == n_ && "evaluate_replay: proposed tour size must match");
+	return evaluate_replay([&](std::size_t i) { return proposed[i]; }, from_pos, prefix_cost);
+}
+
+// --- Staging lifecycle ------------------------------------------------------
+
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::save_staging() const {
+	ctx_.save_staging(n_);
+}
+
+template <DistanceSource Dist, typename Variant>
+template <typename CityFn>
+void Solver<Dist, Variant>::accept_replay(
+    CityFn&& city_at, std::size_t from_pos, cost_type new_cost)
+{
+	ctx_.commit_staging(n_);
+
+	for (std::size_t i = from_pos; i < n_; ++i)
+		tour_[i] = city_at(i);
+	for (std::size_t i = from_pos; i < n_; ++i)
+		position_[static_cast<std::size_t>(tour_[i])] = static_cast<city_type>(i);
+	cost_ = new_cost;
 }
 
 // --- Tour import with known cost --------------------------------------------
