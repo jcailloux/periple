@@ -60,7 +60,17 @@ struct EmptyContext {
 		tour_ = tour; position_ = pos; cost_ = cost; cost_delta = 0;
 	}
 
+	template <typename Move, typename Dist>
+	void init(const Move&, const Dist&, CostT cost) {
+		tour_ = {}; position_ = {}; cost_ = cost; cost_delta = 0;
+	}
+
 	template <typename Move> void commit(const Move&) {}
+
+	void begin_staging(std::size_t) {}
+	void discard_staging() {}
+	void save_staging(std::size_t) {}
+	void commit_staging(std::size_t) {}
 
 	struct Snapshot { double cost_delta; };
 	template <typename Move>
@@ -109,10 +119,59 @@ struct EvalContext {
 		}, dims_);
 	}
 
+	template <typename Move, typename Dist>
+	void init(const Move& m, const Dist& dist, CostT cost) {
+		tour_ = {};
+		position_ = {};
+		cost_ = cost;
+		cost_delta = 0;
+		std::apply([&](auto&... ds) {
+			(init_one(ds, m, dist), ...);
+		}, dims_);
+	}
+
 	template <typename Move>
 	void commit(const Move& m) {
 		std::apply([&](auto&... ds) {
 			(commit_one(ds, m), ...);
+		}, dims_);
+	}
+
+	// --- Staging lifecycle (dispatched to dimensions that support it) -----
+
+	void begin_staging(std::size_t from) {
+		std::apply([from](auto&... ds) {
+			(([]<typename D>(D& d, std::size_t f) {
+				if constexpr (requires { d.begin_staging(f); })
+					d.begin_staging(f);
+			}(ds, from)), ...);
+		}, dims_);
+	}
+
+	void discard_staging() {
+		std::apply([](auto&... ds) {
+			(([]<typename D>(D& d) {
+				if constexpr (requires { d.discard_staging(); })
+					d.discard_staging();
+			}(ds)), ...);
+		}, dims_);
+	}
+
+	void save_staging(std::size_t to) {
+		std::apply([to](auto&... ds) {
+			(([]<typename D>(D& d, std::size_t t) {
+				if constexpr (requires { d.save_staging(t); })
+					d.save_staging(t);
+			}(ds, to)), ...);
+		}, dims_);
+	}
+
+	void commit_staging(std::size_t to) {
+		std::apply([to](auto&... ds) {
+			(([]<typename D>(D& d, std::size_t t) {
+				if constexpr (requires { d.commit_staging(t); })
+					d.commit_staging(t);
+			}(ds, to)), ...);
 		}, dims_);
 	}
 
