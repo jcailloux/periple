@@ -5,6 +5,7 @@
 #include <periple/core/moves/dp_move.hpp>
 #include <periple/core/moves/two_opt_move.hpp>
 #include <periple/core/dimensions.hpp>
+#include <periple/core/dimensions/cumulative_cost.hpp>
 #include <periple/core/dimensions/route_timing.hpp>
 #include <periple/core/composed.hpp>
 #include <periple/core/solver.hpp>

@@ -2,8 +2,6 @@
 #include <periple/variants/time_windows.hpp>
 #include <periple/variants/service_times.hpp>
 
-#include "solver_test_access.hpp"
-
 #include <cassert>
 #include <cstdio>
 #include <vector>
@@ -51,7 +49,7 @@ void test_self_consistency_no_callbacks() {
 	Solver solver(mat);
 	solver.nearest_neighbor();
 
-	auto result = solver.evaluate_replay(solver.tour(), 1);
+	auto result = solver.evaluate_replay(solver.tour(), 1, 0);
 	assert(result.has_value() && "self-consistency NoCallbacks: should not be filtered");
 	assert(*result == solver.cost() && "self-consistency NoCallbacks: cost must match");
 }
@@ -65,7 +63,7 @@ void test_self_consistency_strict() {
 	Solver solver(mat, tw);
 	solver.nearest_neighbor();
 
-	auto result = solver.evaluate_replay(solver.tour(), 1);
+	auto result = solver.evaluate_replay(solver.tour(), 1, 0);
 	assert(result.has_value() && "self-consistency Strict: should not be filtered");
 	assert(*result == solver.cost() && "self-consistency Strict: cost must match");
 }
@@ -81,7 +79,7 @@ void test_self_consistency_relaxed() {
 	solver.nearest_neighbor();
 	// NN avoids city 1 early due to penalty, cost includes violations.
 
-	auto result = solver.evaluate_replay(solver.tour(), 1);
+	auto result = solver.evaluate_replay(solver.tour(), 1, 0);
 	assert(result.has_value() && "self-consistency Relaxed: should not be filtered");
 	assert(*result == solver.cost() && "self-consistency Relaxed: cost must match");
 }
@@ -98,7 +96,7 @@ void test_self_consistency_composed() {
 	Solver solver(mat, variant);
 	solver.nearest_neighbor();
 
-	auto result = solver.evaluate_replay(solver.tour(), 1);
+	auto result = solver.evaluate_replay(solver.tour(), 1, 0);
 	assert(result.has_value() && "self-consistency Composed: should not be filtered");
 	assert(*result == solver.cost() && "self-consistency Composed: cost must match");
 }
@@ -115,7 +113,8 @@ void test_different_tour() {
 
 	// Propose [0,1,2,3] (differs from position 2 onward).
 	std::vector<std::size_t> proposed = {0, 1, 2, 3};
-	auto result = solver.evaluate_replay(proposed, 2);
+	// prefix_cost = dist(0,1) = 10
+	auto result = solver.evaluate_replay(proposed, 2, 10);
 	assert(result.has_value() && "different tour: should be feasible");
 
 	// Verify against set_tour.
@@ -141,7 +140,7 @@ void test_strict_infeasible() {
 	assert(solver.status() == SolutionStatus::feasible && "setup: NN tour must be feasible");
 
 	std::vector<std::size_t> proposed = {0, 1, 2, 3};
-	auto result = solver.evaluate_replay(proposed, 2);
+	auto result = solver.evaluate_replay(proposed, 2, 10);
 	assert(!result.has_value() && "strict infeasible: must return nullopt");
 }
 
@@ -159,7 +158,7 @@ void test_strict_feasible() {
 	solver.nearest_neighbor();
 
 	std::vector<std::size_t> proposed = {0, 1, 2, 3};
-	auto result = solver.evaluate_replay(proposed, 2);
+	auto result = solver.evaluate_replay(proposed, 2, 10);
 	assert(result.has_value() && "strict feasible: should not be filtered");
 
 	Solver verifier(mat, tw);
@@ -183,7 +182,8 @@ void test_relaxed_penalties() {
 
 	// Propose [0,2,1,3] (from_pos = 2, different suffix).
 	std::vector<std::size_t> proposed = {0, 2, 1, 3};
-	auto result = solver.evaluate_replay(proposed, 2);
+	// prefix_cost = dist(0,2) = 15 (no penalty in prefix)
+	auto result = solver.evaluate_replay(proposed, 2, 15);
 	assert(result.has_value() && "relaxed penalties: Relaxed never rejects");
 
 	Solver verifier(mat, relaxed);
@@ -209,7 +209,8 @@ void test_composed_coherence() {
 	solver.nearest_neighbor();
 
 	std::vector<std::size_t> proposed = {0, 1, 2, 3};
-	auto result = solver.evaluate_replay(proposed, 2);
+	// prefix_cost = dist(0,1) = 10 (ServiceTimes/Strict don't add cost_delta)
+	auto result = solver.evaluate_replay(proposed, 2, 10);
 	assert(result.has_value() && "composed coherence: should not be filtered");
 
 	Solver verifier(mat, variant);
@@ -232,32 +233,160 @@ void test_has_callbacks() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: cumul_costs consistency
+// Test 8: Staging isolation -- evaluate_replay preserves solver state
 // ---------------------------------------------------------------------------
 
-void test_cumul_costs_consistency() {
+void test_staging_isolation() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 200}, {0, 200}, {0, 200}, {0, 200}
+	};
+	time_windows::Strict tw(windows);
+	Solver solver(mat, tw);
+	solver.nearest_neighbor();
+	// NN: [0,1,3,2].
+
+	auto original_cost = solver.cost();
+	auto original_tour = std::vector<std::size_t>(solver.tour().begin(), solver.tour().end());
+
+	// Evaluate a different tour.
+	std::vector<std::size_t> proposed = {0, 1, 2, 3};
+	auto result = solver.evaluate_replay(proposed, 2, 10);
+	assert(result.has_value() && "staging isolation: eval should succeed");
+
+	// Solver state must be unchanged.
+	assert(solver.cost() == original_cost && "staging isolation: cost must not change");
+	for (std::size_t i = 0; i < original_tour.size(); ++i)
+		assert(solver.tour()[i] == original_tour[i] && "staging isolation: tour must not change");
+
+	// Replaying the original tour must still give the original cost.
+	auto self = solver.evaluate_replay(solver.tour(), 1, 0);
+	assert(self.has_value() && *self == original_cost && "staging isolation: self-replay must match");
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: Save and accept -- staging lifecycle
+// ---------------------------------------------------------------------------
+
+void test_save_and_accept() {
 	auto mat = make_mat4();
 	Solver solver(mat);
 	solver.nearest_neighbor();
 	// NN: [0,1,3,2], cost = 80.
 
-	SolverTestAccess access(solver);
-	auto costs = access.cumul_costs();
-	auto t = solver.tour();
+	std::vector<std::size_t> proposed = {0, 1, 2, 3};
+	auto result = solver.evaluate_replay(proposed, 2, 10);
+	assert(result.has_value() && "save_and_accept: eval should succeed");
 
-	assert(costs[0] == 0 && "cumul_costs[0] must be 0");
+	solver.save_staging();
+	solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
 
-	// Recompute from tour edges and verify each position.
-	int running = 0;
-	for (std::size_t i = 0; i < t.size(); ++i) {
-		assert(costs[i] == running && "cumul_costs[i] must equal sum of edges to position i");
-		if (i + 1 < t.size())
-			running += mat(t[i], t[i + 1]);
-	}
+	assert(solver.cost() == *result && "save_and_accept: cost must match");
+	assert(solver.tour()[2] == 2 && "save_and_accept: tour[2] must be updated");
+	assert(solver.tour()[3] == 3 && "save_and_accept: tour[3] must be updated");
+
+	// Self-replay must still be consistent.
+	auto self = solver.evaluate_replay(solver.tour(), 1, 0);
+	assert(self.has_value() && *self == solver.cost() && "save_and_accept: self-replay must match");
 }
 
 // ---------------------------------------------------------------------------
-// Test 9: Successive calls with same from_pos
+// Test 10: Reject then accept -- record survives subsequent evaluation
+// ---------------------------------------------------------------------------
+
+void test_reject_then_accept() {
+	auto mat = make_mat4();
+	Solver solver(mat);
+	solver.nearest_neighbor();
+	// NN: [0,1,3,2], cost = 80.
+
+	// Evaluate and save tour A.
+	std::vector<std::size_t> tour_a = {0, 1, 2, 3};
+	auto cost_a = solver.evaluate_replay(tour_a, 2, 10);
+	assert(cost_a.has_value() && "reject_then_accept: tour_a eval should succeed");
+	solver.save_staging();
+
+	// Evaluate tour B (overwrites staging, but record is preserved).
+	std::vector<std::size_t> tour_b = {0, 1, 3, 2};
+	auto cost_b = solver.evaluate_replay(tour_b, 2, 10);
+	assert(cost_b.has_value() && "reject_then_accept: tour_b eval should succeed");
+	// Do NOT save_staging -- we want to accept tour A's record.
+
+	// Accept the recorded tour A.
+	solver.accept_replay([&](std::size_t i) { return tour_a[i]; }, 2, *cost_a);
+
+	assert(solver.cost() == *cost_a && "reject_then_accept: cost must match tour_a");
+	assert(solver.tour()[2] == 2 && "reject_then_accept: tour must reflect tour_a");
+
+	// Self-replay must be consistent.
+	auto self = solver.evaluate_replay(solver.tour(), 1, 0);
+	assert(self.has_value() && *self == solver.cost() && "reject_then_accept: self-replay must match");
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: Direct commit without record
+// ---------------------------------------------------------------------------
+
+void test_direct_commit() {
+	auto mat = make_mat4();
+	Solver solver(mat);
+	solver.nearest_neighbor();
+	// NN: [0,1,3,2], cost = 80.
+
+	std::vector<std::size_t> proposed = {0, 1, 2, 3};
+	auto result = solver.evaluate_replay(proposed, 2, 10);
+	assert(result.has_value() && "direct commit: eval should succeed");
+
+	// Accept without save_staging -- commit takes staging directly.
+	solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
+
+	assert(solver.cost() == *result && "direct commit: cost must match");
+	assert(solver.tour()[2] == 2 && "direct commit: tour must be updated");
+
+	auto self = solver.evaluate_replay(solver.tour(), 1, 0);
+	assert(self.has_value() && *self == solver.cost() && "direct commit: self-replay must match");
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: TwoOptMove city_at correctness
+// ---------------------------------------------------------------------------
+
+void test_two_opt_city_at() {
+	std::vector<std::size_t> tour = {0, 1, 2, 3, 4};
+	TwoOptMove<std::size_t> move{1, 3}; // reverse segment (1, 3] = {2, 3}
+
+	auto city_at = move.city_at(tour);
+	assert(city_at(0) == 0 && "two_opt city_at: pos 0 unchanged");
+	assert(city_at(1) == 1 && "two_opt city_at: pos 1 unchanged (boundary)");
+	assert(city_at(2) == 3 && "two_opt city_at: pos 2 reversed");
+	assert(city_at(3) == 2 && "two_opt city_at: pos 3 reversed");
+	assert(city_at(4) == 4 && "two_opt city_at: pos 4 unchanged");
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: Span overload matches callable
+// ---------------------------------------------------------------------------
+
+void test_span_overload() {
+	auto mat = make_mat4();
+	Solver solver(mat);
+	solver.nearest_neighbor();
+
+	std::vector<std::size_t> proposed = {0, 1, 2, 3};
+
+	auto result_span = solver.evaluate_replay(
+	    std::span<const std::size_t>(proposed), 2, 10);
+	auto result_callable = solver.evaluate_replay(
+	    [&](std::size_t i) { return proposed[i]; }, 2, 10);
+
+	assert(result_span.has_value() && result_callable.has_value()
+	    && "span overload: both must succeed");
+	assert(*result_span == *result_callable
+	    && "span overload: results must match");
+}
+
+// ---------------------------------------------------------------------------
+// Test 14: Successive calls with same from_pos
 // ---------------------------------------------------------------------------
 
 void test_successive_calls() {
@@ -267,11 +396,11 @@ void test_successive_calls() {
 	// NN: [0,1,3,2].
 
 	std::vector<std::size_t> tour_a = {0, 1, 2, 3};
-	auto result_a = solver.evaluate_replay(tour_a, 2);
+	auto result_a = solver.evaluate_replay(tour_a, 2, 10);
 	assert(result_a.has_value() && "successive calls: first must succeed");
 
 	std::vector<std::size_t> tour_b = {0, 1, 3, 2};
-	auto result_b = solver.evaluate_replay(tour_b, 2);
+	auto result_b = solver.evaluate_replay(tour_b, 2, 10);
 	assert(result_b.has_value() && "successive calls: second must succeed");
 
 	Solver va(mat); va.set_tour(tour_a);
@@ -298,7 +427,7 @@ void test_early_exit() {
 	// Propose [0,1,2,3]: city 2 at pos 2 (arrival 45, OK),
 	// city 3 at pos 3 (arrival 75 > 40, rejected). Early exit at pos 3.
 	std::vector<std::size_t> proposed = {0, 1, 2, 3};
-	auto result = solver.evaluate_replay(proposed, 2);
+	auto result = solver.evaluate_replay(proposed, 2, 10);
 	assert(!result.has_value() && "early exit: must return nullopt");
 }
 
@@ -361,8 +490,15 @@ int main() {
 		{"composed_coherence",           test_composed_coherence},
 		// Compile-time
 		{"has_callbacks",                test_has_callbacks},
-		// cumul_costs
-		{"cumul_costs_consistency",      test_cumul_costs_consistency},
+		// Staging
+		{"staging_isolation",            test_staging_isolation},
+		{"save_and_accept",              test_save_and_accept},
+		{"reject_then_accept",           test_reject_then_accept},
+		{"direct_commit",                test_direct_commit},
+		// TwoOptMove
+		{"two_opt_city_at",              test_two_opt_city_at},
+		// Span overload
+		{"span_overload",                test_span_overload},
 		// Successive calls
 		{"successive_calls",             test_successive_calls},
 		// Early exit

@@ -4,6 +4,7 @@
 //
 // Savelsbergh (1985), "Local Search in Routing Problems with Time Windows"
 
+#include <periple/core/dimensions/cumulative_cost.hpp>
 #include <periple/core/dimensions/route_timing.hpp>
 #include <periple/core/moves/dp_move.hpp>
 
@@ -175,7 +176,7 @@ private:
 // ---------------------------------------------------------------------------
 
 struct Relaxed {
-	using dimension = RouteTiming;
+	using dimension = Dimensions<RouteTiming, CumulativeCost>;
 
 	// Single window per city.
 	Relaxed(std::span<const TimeWindow> windows, double penalty_weight = 1000) : store_(windows), penalty_weight_(penalty_weight) {}

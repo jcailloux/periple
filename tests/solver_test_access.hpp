@@ -21,10 +21,6 @@ public:
 		return true;
 	}
 
-	auto cumul_costs() const -> std::span<const typename Solver<Dist, Variant>::cost_type> {
-		return {s_.cumul_costs_.data(), s_.n_};
-	}
-
 private:
 	const Solver<Dist, Variant>& s_;
 };

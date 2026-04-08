@@ -101,6 +101,7 @@ public:
 	// Returns the total tour cost if feasible, or nullopt if any move_filter
 	// rejects. Uses staged dimension buffers (non-destructive).
 	template <typename CityFn>
+	    requires std::invocable<CityFn&, std::size_t>
 	[[nodiscard]] auto evaluate_replay(CityFn&& city_at, std::size_t from_pos,
 	                                   cost_type prefix_cost) const -> std::optional<cost_type>;
 
@@ -533,6 +534,7 @@ auto Solver<Dist, Variant>::try_trivial() -> bool {
 
 template <DistanceSource Dist, typename Variant>
 template <typename CityFn>
+    requires std::invocable<CityFn&, std::size_t>
 auto Solver<Dist, Variant>::evaluate_replay(
     CityFn&& city_at, std::size_t from_pos,
     cost_type prefix_cost) const -> std::optional<cost_type>

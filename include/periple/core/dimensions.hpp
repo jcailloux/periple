@@ -208,9 +208,12 @@ private:
 		}
 	}
 
+	// Dispatch commit: 2-param (Move, Ctx) if available, else 1-param.
 	template <typename D, typename Move>
-	static void commit_one(D& d, const Move& m) {
-		if constexpr (requires { d.commit(m); }) {
+	void commit_one(D& d, const Move& m) {
+		if constexpr (requires { d.commit(m, *this); }) {
+			d.commit(m, *this);
+		} else if constexpr (requires { d.commit(m); }) {
 			d.commit(m);
 		}
 	}
