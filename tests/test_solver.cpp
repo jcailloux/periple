@@ -30,6 +30,18 @@ int main() {
 	assert(solver.tour()[0] == 0);
 	assert(solver.tour()[1] == 2);
 
+	// --- is_visited after set_tour (partial, complete, known cost) ---
+	std::vector<std::size_t> partial = {0, 2};
+	solver.set_tour(partial);
+	assert(solver.is_visited(2) && !solver.is_visited(1) && "set_tour (partial): only the prefix is visited");
+	solver.set_tour(manual);
+	for (std::size_t c = 0; c < 4; ++c)
+		assert(solver.is_visited(c) && "set_tour (complete): every city is visited");
+	solver.set_tour(partial);
+	solver.set_tour(manual, 80);
+	for (std::size_t c = 0; c < 4; ++c)
+		assert(solver.is_visited(c) && "set_tour (known cost): every city is visited");
+
 	// --- clear ---
 	solver.clear();
 	assert(solver.status() == periple::SolutionStatus::none);

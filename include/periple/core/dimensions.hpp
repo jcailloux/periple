@@ -6,11 +6,13 @@
 // - EvalContext: read-only solver state (tour, position, cost) + mutable dimensions
 // - EmptyContext: lightweight context for NoCallbacks (no dimensions)
 // - Dimension concept and Dimensions<Ts...> type list
+// - Dimension list helpers (normalize, concat, deduplicate)
 // - context_for<Variant>: deduce the right context type from a variant
 // - invoke_prepare / invoke_filter: dispatch to variant callbacks
 
 #include <periple/core/traits.hpp>
 #include <periple/core/moves/append_move.hpp>
+#include <periple/core/dimensions/cumulative_cost.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -22,11 +24,63 @@
 namespace periple {
 
 // ---------------------------------------------------------------------------
+// Tags
+// ---------------------------------------------------------------------------
+
+struct NoCallbacks {};
+
+// ---------------------------------------------------------------------------
 // Dimensions type list
 // ---------------------------------------------------------------------------
 
 template <typename... Ts>
 struct Dimensions {};
+
+namespace detail {
+
+// Normalize a dimension declaration to Dimensions<...> form.
+template <typename Dim>
+struct normalize_dim { using type = Dimensions<Dim>; };
+
+template <typename... Ts>
+struct normalize_dim<Dimensions<Ts...>> { using type = Dimensions<Ts...>; };
+
+// Concatenate two Dimensions lists.
+template <typename A, typename B> struct concat_dims;
+
+template <typename... As, typename... Bs>
+struct concat_dims<Dimensions<As...>, Dimensions<Bs...>> {
+	using type = Dimensions<As..., Bs...>;
+};
+
+// Concatenate N Dimensions lists.
+template <typename... Ds> struct concat_all;
+template <> struct concat_all<> { using type = Dimensions<>; };
+template <typename D> struct concat_all<D> { using type = D; };
+
+template <typename D1, typename D2, typename... Rest>
+struct concat_all<D1, D2, Rest...> {
+	using type = typename concat_all<typename concat_dims<D1, D2>::type, Rest...>::type;
+};
+
+// Left-fold deduplication: accumulate unique types.
+template <typename Acc, typename... Ts> struct unique_fold;
+template <typename Acc> struct unique_fold<Acc> { using type = Acc; };
+
+template <typename... Acc, typename T, typename... Rest>
+struct unique_fold<Dimensions<Acc...>, T, Rest...> {
+	using next = std::conditional_t<(std::is_same_v<T, Acc> || ...), Dimensions<Acc...>, Dimensions<Acc..., T>>;
+	using type = typename unique_fold<next, Rest...>::type;
+};
+
+template <typename D> struct deduplicate;
+
+template <typename... Ts>
+struct deduplicate<Dimensions<Ts...>> {
+	using type = typename unique_fold<Dimensions<>, Ts...>::type;
+};
+
+} // namespace detail
 
 // ---------------------------------------------------------------------------
 // Dimension concept
@@ -45,6 +99,8 @@ concept Dimension = requires(T& t, std::size_t n) {
 template <typename CityT, typename CostT>
 struct EmptyContext {
 	double cost_delta = 0;
+
+	template <typename D> static constexpr bool has_dim = false;
 
 	[[nodiscard]] auto tour() const -> std::span<const CityT> { return tour_; }
 	[[nodiscard]] auto position() const -> std::span<const CityT> { return position_; }
@@ -90,6 +146,9 @@ private:
 template <typename CityT, typename CostT, Dimension... Dims>
 struct EvalContext {
 	double cost_delta = 0;
+
+	template <typename D>
+	static constexpr bool has_dim = (std::is_same_v<D, Dims> || ...);
 
 	template <typename D> auto& dim() { return std::get<D>(dims_); }
 	template <typename D> const auto& dim() const { return std::get<D>(dims_); }
@@ -235,10 +294,17 @@ private:
 
 namespace detail {
 
-template <typename Dim, typename CityT, typename CostT>
-struct make_eval_context {
-	using type = EvalContext<CityT, CostT, Dim>;
+// Dimensions declared by a variant, normalized (empty if none).
+template <typename Variant, typename = void>
+struct declared_dims { using type = Dimensions<>; };
+
+template <typename Variant>
+struct declared_dims<Variant, std::void_t<typename Variant::dimension>> {
+	using type = typename normalize_dim<typename Variant::dimension>::type;
 };
+
+template <typename DimList, typename CityT, typename CostT>
+struct make_eval_context;
 
 template <typename... Ts, typename CityT, typename CostT>
 struct make_eval_context<Dimensions<Ts...>, CityT, CostT> {
@@ -247,16 +313,21 @@ struct make_eval_context<Dimensions<Ts...>, CityT, CostT> {
 
 } // namespace detail
 
-template <typename Variant, typename CityT, typename CostT, typename = void>
+// NoCallbacks -> EmptyContext. Any other variant -> EvalContext with
+// CumulativeCost (needed by replay) ahead of its declared dimensions, deduplicated.
+template <typename Variant, typename CityT, typename CostT>
 struct context_for {
-	using type = EmptyContext<CityT, CostT>;
+	using type = typename detail::make_eval_context<
+		typename detail::deduplicate<
+			typename detail::concat_dims<
+				Dimensions<CumulativeCost>,
+				typename detail::declared_dims<Variant>::type>::type>::type,
+		CityT, CostT>::type;
 };
 
-template <typename Variant, typename CityT, typename CostT>
-struct context_for<Variant, CityT, CostT,
-                   std::void_t<typename Variant::dimension>> {
-	using type = typename detail::make_eval_context<
-		typename Variant::dimension, CityT, CostT>::type;
+template <typename CityT, typename CostT>
+struct context_for<NoCallbacks, CityT, CostT> {
+	using type = EmptyContext<CityT, CostT>;
 };
 
 // ---------------------------------------------------------------------------

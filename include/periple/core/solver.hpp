@@ -15,12 +15,6 @@
 namespace periple {
 
 // ---------------------------------------------------------------------------
-// Tags
-// ---------------------------------------------------------------------------
-
-struct NoCallbacks {};
-
-// ---------------------------------------------------------------------------
 // Parameter structs
 // ---------------------------------------------------------------------------
 
@@ -108,8 +102,15 @@ public:
 	[[nodiscard]] auto evaluate_replay(std::span<const city_type> proposed, std::size_t from_pos, cost_type prefix_cost) const
 	    -> std::optional<cost_type>;
 
+	// Committed cost of tour[0..pos] (edges + variant penalties), O(1).
+	// Requires a variant (CumulativeCost dimension).
+	[[nodiscard]] auto prefix_cost(std::size_t pos) const -> cost_type;
+
 	// Staging lifecycle for local search.
 	void save_staging() const;
+
+	// Drops any pending replay evaluation (staged dimension state).
+	void discard_staging() const;
 
 	template <typename CityFn>
 	void accept_replay(CityFn&& city_at, std::size_t from_pos, cost_type new_cost);
@@ -169,7 +170,7 @@ private:
 
 	// Workspace (grow-only)
 	std::vector<city_type> position_;  // Inverse index: city -> position in tour.
-	std::vector<uint8_t>   visited_;
+	std::vector<uint8_t>   visited_;   // visited_[c] == (c is in tour); maintained like position_.
 	std::vector<uint8_t>   dont_look_;
 	std::vector<city_type> neighbors_;
 	std::size_t            neighbors_k_ = 0;
@@ -300,9 +301,12 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 	std::copy(t.begin(), t.end(), tour_.begin());
 
 	if (n_ > 0) {
-		cost_   = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
-		status_ = (n_ == total) ? SolutionStatus::feasible : SolutionStatus::partial;
-		if (n_ < total) {
+		cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
+		if (n_ == total) {
+			status_ = SolutionStatus::feasible;
+			std::fill_n(visited_.data(), total, uint8_t{1});
+		} else {
+			status_ = SolutionStatus::partial;
 			std::fill_n(visited_.data(), total, uint8_t{0});
 			for (std::size_t i = 0; i < n_; ++i)
 				visited_[static_cast<std::size_t>(t[i])] = 1;
@@ -582,11 +586,27 @@ auto Solver<Dist, Variant>::evaluate_replay(
 	return evaluate_replay([&](std::size_t i) { return proposed[i]; }, from_pos, prefix_cost);
 }
 
+// --- Prefix cost ------------------------------------------------------------
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::prefix_cost(std::size_t pos) const -> cost_type {
+	static_assert(context_type::template has_dim<CumulativeCost>,
+		"prefix_cost: requires a variant (CumulativeCost dimension)");
+	assert(pos < n_ && "prefix_cost: position out of range");
+	return static_cast<cost_type>(
+		ctx_.template dim<CumulativeCost>().costs.committed(pos));
+}
+
 // --- Staging lifecycle ------------------------------------------------------
 
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::save_staging() const {
 	ctx_.save_staging(n_);
+}
+
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::discard_staging() const {
+	ctx_.discard_staging();
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -634,6 +654,7 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t,
 
 	if (n_ == total) {
 		status_ = SolutionStatus::feasible;
+		std::fill_n(visited_.data(), total, uint8_t{1});
 	} else if (n_ > 0) {
 		status_ = SolutionStatus::partial;
 		std::fill_n(visited_.data(), total, uint8_t{0});

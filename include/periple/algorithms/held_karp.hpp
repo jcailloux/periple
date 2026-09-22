@@ -109,23 +109,22 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
 		}
 	}
 
-	// Backtrack
-	if (best_cost < INF) {
-		tour_[n_ - 1] = best_last;
-		std::size_t S = full;
-		for (std::size_t pos = n_ - 1; pos > 0; --pos) {
-			auto cur = static_cast<std::size_t>(tour_[pos]);
-			tour_[pos - 1] = parent[idx(S, cur)];
-			S ^= (std::size_t{1} << cur);
-		}
-	}
-
 	if (best_cost == INF) {
 		n_ = 0;
 		cost_ = {};
 		status_ = SolutionStatus::infeasible;
 		return *this;
 	}
+
+	// Backtrack
+	tour_[n_ - 1] = best_last;
+	std::size_t S = full;
+	for (std::size_t pos = n_ - 1; pos > 0; --pos) {
+		auto cur = static_cast<std::size_t>(tour_[pos]);
+		tour_[pos - 1] = parent[idx(S, cur)];
+		S ^= (std::size_t{1} << cur);
+	}
+	std::fill_n(visited_.data(), n_, uint8_t{1});
 
 	cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
 	status_ = SolutionStatus::optimal;

@@ -99,9 +99,10 @@ void test_one(const Algo& algo, const Dist& dist) {
 	assert_valid_tour(solver.tour(), n);
 	assert(solver.cost() == recompute_cost(dist, solver.tour()));
 
-	// Verify position_ consistency
+	// Tour invariants
 	periple::SolverTestAccess access(solver);
 	assert(access.position_consistent());
+	assert(access.visited_consistent());
 
 	if constexpr (Algo::is_exact) {
 		assert(solver.status() == periple::SolutionStatus::optimal);
@@ -165,6 +166,7 @@ void test_cache_invalidation(const Algo& algo) {
 	assert(solver.cost() == recompute_cost(m2, solver.tour()));
 	periple::SolverTestAccess access(solver);
 	assert(access.position_consistent());
+	assert(access.visited_consistent());
 
 	if constexpr (Algo::is_exact)
 		assert(solver.cost() == brute_force_optimal(m2));

@@ -1,6 +1,7 @@
 #include <periple/algorithms/registry.hpp>
 #include <periple/distance/matrix.hpp>
 #include <periple/variants/time_windows.hpp>
+#include <solver_test_access.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -72,6 +73,14 @@ auto pure_distance_cost(const Dist& dist, std::span<const typename dist_traits<D
 	return total;
 }
 
+// Invariants every algorithm must leave in place, whatever the final status.
+template <DistanceSource Dist, typename Variant>
+void assert_tour_invariants(const Solver<Dist, Variant>& solver) {
+	SolverTestAccess access(solver);
+	assert(access.position_consistent() && "position_ must match tour_");
+	assert(access.visited_consistent() && "visited_ must match tour_");
+}
+
 // Verify that arrival times respect all time windows.
 template <DistanceSource Dist>
 bool tour_respects_windows(
@@ -100,6 +109,7 @@ void test_strict(const Algo& algo, const Dist& dist, std::span<const time_window
 	time_windows::Strict tw(windows);
 	Solver solver(dist, tw);
 	algo(solver);
+	assert_tour_invariants(solver);
 
 	if (solver.status() == SolutionStatus::partial ||
 	    solver.status() == SolutionStatus::infeasible) {
@@ -141,6 +151,7 @@ void test_relaxed(const Algo& algo, const Dist& dist, std::span<const time_windo
 	time_windows::Relaxed relaxed(windows, penalty_weight);
 	Solver solver(dist, relaxed);
 	algo(solver);
+	assert_tour_invariants(solver);
 
 	assert_valid_tour(dist, solver.tour());
 
@@ -187,6 +198,7 @@ void run_strict_optional(const Dist& dist) {
 		time_windows::Strict tw(tw_span);
 		Solver solver(dist, tw);
 		algo(solver);
+		assert_tour_invariants(solver);
 
 		// All cities unconstrained except city 0 with generous window.
 		// Should always find a full tour.
@@ -205,6 +217,7 @@ void run_relaxed_optional(const Dist& dist) {
 		time_windows::Relaxed relaxed(std::span<const std::optional<time_windows::TimeWindow>>(windows), 1000);
 		Solver solver(dist, relaxed);
 		algo(solver);
+		assert_tour_invariants(solver);
 
 		assert_valid_tour(dist, solver.tour());
 

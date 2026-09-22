@@ -263,8 +263,7 @@ struct RejectCity2 {
 };
 
 void test_composed_no_dimensions() {
-	// Both PenalizeCity1 and RejectCity2 have no dimension.
-	// Composed should produce EmptyContext.
+	// Neither variant has a dimension: the context only carries the implicit CumulativeCost.
 	auto mat = make_mat4();
 
 	PenalizeCity1 penalty;
