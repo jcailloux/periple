@@ -4,6 +4,7 @@
 
 #include <cassert>
 #include <cstdio>
+#include <type_traits>
 #include <vector>
 
 using namespace periple;
@@ -38,6 +39,27 @@ struct PenalizeCity1 {
 	void move_prepare(const AppendMove<std::size_t>& m, Ctx& ctx) const {
 		if (m.city == 1) ctx.cost_delta += 9999.0;
 	}
+};
+
+// Fractional parts accumulate past 1: summing in double before truncation
+// would diverge from Solver::append (per-edge cast to cost_type).
+struct FractionalPenalty {
+	template <typename Ctx>
+	void move_prepare(const AppendMove<std::size_t>& m, Ctx& ctx) const {
+		ctx.cost_delta += 0.6 + 0.1 * static_cast<double>(m.city);
+	}
+};
+
+struct FlatPenalty {
+	template <typename Ctx>
+	void move_prepare(const AppendMove<std::size_t>&, Ctx& ctx) const {
+		ctx.cost_delta += 7.0;
+	}
+};
+
+// Explicitly declares CumulativeCost: context_for must not duplicate it.
+struct ExplicitCumulative {
+	using dimension = Dimensions<CumulativeCost, RouteTiming>;
 };
 
 // ---------------------------------------------------------------------------
@@ -471,6 +493,109 @@ void test_close_tour_feasible() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 15: prefix_cost -- replaying from prefix_cost(k-1) gives the tour cost
+// ---------------------------------------------------------------------------
+
+template <typename SolverT>
+void check_prefix_cost_replay(const SolverT& solver) {
+	assert(solver.prefix_cost(0) == 0 && "prefix_cost(0): the first city contributes nothing");
+	const auto n = solver.tour().size();
+	for (std::size_t k = 1; k < n; ++k) {
+		auto result = solver.evaluate_replay(solver.tour(), k, solver.prefix_cost(k - 1));
+		assert(result.has_value() && "prefix_cost: self-replay must be feasible");
+		assert(*result == solver.cost()
+			&& "prefix_cost: replay from prefix_cost(k-1) must give the tour cost");
+	}
+}
+
+void test_prefix_cost_matches_replay_relaxed() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 5}, {0, 100}, {0, 100}
+	};
+	time_windows::Relaxed relaxed(windows, 10);
+	Solver solver(mat, relaxed);
+	solver.nearest_neighbor();
+	assert(solver.status() == SolutionStatus::feasible && "setup: Relaxed never rejects");
+	check_prefix_cost_replay(solver);
+}
+
+void test_prefix_cost_fractional_penalty() {
+	auto mat = make_mat4();
+	FractionalPenalty penalty;
+	Solver solver(mat, penalty);
+	solver.nearest_neighbor();
+	assert(solver.status() == SolutionStatus::feasible && "setup: FractionalPenalty never rejects");
+	check_prefix_cost_replay(solver);
+}
+
+void test_prefix_cost_pos0_ignores_delta() {
+	auto mat = make_mat4();
+	FlatPenalty flat;
+	Solver solver(mat, flat);
+	solver.nearest_neighbor();
+
+	assert(solver.prefix_cost(0) == 0
+		&& "prefix_cost(0): the first city contributes nothing, even with a penalty");
+	const auto t0 = solver.tour()[0];
+	const auto t1 = solver.tour()[1];
+	assert(solver.prefix_cost(1) == solver.distance(t0, t1) + 7
+		&& "prefix_cost(1): first edge plus its penalty");
+}
+
+// ---------------------------------------------------------------------------
+// Test 16: context_for -- CumulativeCost is implicit for every variant
+// ---------------------------------------------------------------------------
+
+void test_context_auto_cumulative_cost() {
+	using MatT = SymmetricDistanceMatrix<int>;
+	static_assert(!Solver<MatT>::context_type::has_dim<CumulativeCost>,
+		"NoCallbacks: no dimensions");
+	static_assert(Solver<MatT, PenalizeCity1>::context_type::has_dim<CumulativeCost>,
+		"variant without dimension: CumulativeCost is implicit");
+	static_assert(Solver<MatT, time_windows::Strict>::context_type::has_dim<CumulativeCost>
+		&& Solver<MatT, time_windows::Strict>::context_type::has_dim<RouteTiming>,
+		"Strict: declared RouteTiming plus implicit CumulativeCost");
+	static_assert(Solver<MatT, time_windows::Relaxed>::context_type::has_dim<CumulativeCost>
+		&& Solver<MatT, time_windows::Relaxed>::context_type::has_dim<RouteTiming>,
+		"Relaxed: declared RouteTiming plus implicit CumulativeCost");
+	static_assert(std::is_same_v<Solver<MatT, ExplicitCumulative>::context_type,
+	                             EvalContext<std::size_t, int, CumulativeCost, RouteTiming>>,
+		"explicit CumulativeCost: deduplicated, not doubled");
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: prefix_cost reads committed values while a staging is active
+// ---------------------------------------------------------------------------
+
+void test_committed_read_during_staging() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 5}, {0, 100}, {0, 100}
+	};
+	time_windows::Relaxed relaxed(windows, 10);
+	Solver solver(mat, relaxed);
+	solver.nearest_neighbor();
+	// NN with penalties: [0,2,3,1].
+
+	// Evaluate a different suffix from position 2 and leave the staging active.
+	std::vector<std::size_t> other = {0, 2, 1, 3};
+	auto pending = solver.evaluate_replay(other, 2, solver.prefix_cost(1));
+	assert(pending.has_value() && "committed read: Relaxed never rejects");
+	assert(*pending != solver.cost() && "setup: the other suffix must cost differently");
+
+	// prefix_cost(2) must return the committed value, not the staged one.
+	auto self = solver.evaluate_replay(solver.tour(), 3, solver.prefix_cost(2));
+	assert(self.has_value() && *self == solver.cost()
+		&& "committed read: prefix_cost must ignore the staged suffix");
+
+	solver.discard_staging();
+	auto again = solver.evaluate_replay(solver.tour(), 1, 0);
+	assert(again.has_value() && *again == solver.cost()
+		&& "committed read: state unchanged after discard_staging");
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -506,6 +631,12 @@ int main() {
 		// close_tour
 		{"close_tour_infeasible",        test_close_tour_infeasible},
 		{"close_tour_feasible",          test_close_tour_feasible},
+		// prefix_cost / CumulativeCost
+		{"prefix_cost_matches_replay_relaxed", test_prefix_cost_matches_replay_relaxed},
+		{"prefix_cost_fractional_penalty",     test_prefix_cost_fractional_penalty},
+		{"prefix_cost_pos0_ignores_delta",     test_prefix_cost_pos0_ignores_delta},
+		{"context_auto_cumulative_cost",       test_context_auto_cumulative_cost},
+		{"committed_read_during_staging",      test_committed_read_during_staging},
 	};
 
 	for (const auto& t : tests) {
