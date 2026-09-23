@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Algorithms
+
+- 2-opt local search (`two_opt`): first improvement over neighbor lists, driven by a queue of active cities with don't-look bits. O(1) move evaluation when symmetry is declared, O(1) directed evaluation otherwise, replay through the variant pipeline when a variant is present
+- `nn_two_opt` registry entry (tag `2O`): nearest neighbor then 2-opt. Mean gap on Tier 2 + 3 instances: 6.2% against 24.7% for nearest neighbor alone
+
+### Library
+
+- Public local search primitives: `evaluate_reversal` / `accept_reversal` (score and apply a segment reversal through the variant pipeline), `prefix_cost`, `path_cost`, `save_staging` / `discard_staging`
+- `rotate_to_front(city)`: rotates a complete tour at equal cost, for the symmetric mode where the first city is not preserved
+- `CumulativeCost` dimension added automatically to every variant, so a replay can start from any prefix instead of the whole tour
+
+### Breaking
+
+- `Solver::evaluate(city)` is now `evaluate_append(city)`: with reversals getting their own evaluation, the bare name no longer says which move it scores
+
+### Fixed
+
+- `CumulativeCost` accumulated each edge in `double` where `Solver::append` truncates it to `cost_type` first, so prefix costs could diverge from `cost()` for an integer cost type with fractional penalties
+- `is_visited` was stale after `set_tour` with a complete tour and after `held_karp`
+
 ## v0.1.0 (2026-03-24)
 
 Initial release.

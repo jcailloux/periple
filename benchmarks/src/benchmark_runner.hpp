@@ -470,6 +470,10 @@ private:
 		r.runs = algo.runs;
 
 		periple::Solver solver(mat);
+		// Every benchmark instance is symmetric (see BENCHMARKING.md); declaring
+		// it gives local search its O(1) evaluation path. unchecked skips the
+		// O(n^2) debug verification.
+		solver.set_symmetric(true, periple::unchecked);
 		long rss_before = peak_rss_kb();
 
 		if (algo.runs > 1) {
@@ -477,7 +481,7 @@ private:
 			std::vector<double> times(algo.runs);
 
 			for (int run = 0; run < algo.runs; ++run) {
-				solver.clear();
+				solver.set_matrix(mat);
 				unsigned seed = 42 + static_cast<unsigned>(run);
 				auto t0 = std::chrono::steady_clock::now();
 				algo.run_matrix(solver, seed);
@@ -513,7 +517,7 @@ private:
 				int repeats = std::max(5, static_cast<int>(100.0 / wall_ms));
 				std::vector<double> times(repeats);
 				for (int i = 0; i < repeats; ++i) {
-					solver.clear();
+					solver.set_matrix(mat);
 					auto start = std::chrono::steady_clock::now();
 					algo.run_matrix(solver, 0);
 					auto end = std::chrono::steady_clock::now();
@@ -546,6 +550,7 @@ private:
 		r.runs = algo.runs;
 
 		periple::Solver solver(cd);
+		solver.set_symmetric(true, periple::unchecked);
 		long rss_before = peak_rss_kb();
 
 		if (algo.runs > 1) {
@@ -553,7 +558,7 @@ private:
 			std::vector<double> times(algo.runs);
 
 			for (int run = 0; run < algo.runs; ++run) {
-				solver.clear();
+				solver.set_matrix(cd);
 				unsigned seed = 42 + static_cast<unsigned>(run);
 				auto t0 = std::chrono::steady_clock::now();
 				algo.run_coords(solver, seed);
