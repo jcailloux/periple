@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstddef>
 #include <optional>
+#include <string>
 #include <vector>
 
 using namespace periple;
@@ -90,6 +91,63 @@ void test_protocol_nn_n1() {
 	}
 	assert(filter_count == 0 && "no filtering for single city");
 	assert(prepare_count == 1 && "one move_prepare for the start city");
+}
+
+// ---------------------------------------------------------------------------
+// Protocol: reversals replay through the construction pipeline
+// ---------------------------------------------------------------------------
+
+// Number of move_prepare / move_filter pairs in the log, asserting it holds
+// nothing else and in that order: the shape evaluate_replay emits.
+std::size_t checked_replay_pairs(const std::vector<std::string>& log) {
+	assert(log.size() % 2 == 0 && "expected one move_filter per move_prepare");
+	for (std::size_t k = 0; k < log.size(); k += 2) {
+		assert(log[k] == "move_prepare" && "expected move_prepare to open each pair");
+		assert(log[k + 1] == "move_filter" && "expected move_filter to close each pair");
+	}
+	return log.size() / 2;
+}
+
+void test_protocol_reversal_replay() {
+	auto mat = make_mat4();
+	LoggingCallbacks cb;
+	Solver solver(mat, cb);
+	solver.nearest_neighbor();
+
+	const std::size_t n = solver.size();
+	for (std::size_t i = 0; i + 1 < n; ++i) {
+		for (std::size_t j = i + 1; j < n; ++j) {
+			cb.log.clear();
+			const auto scored = solver.evaluate_reversal(i, j);
+			solver.discard_staging();
+			assert(scored && "LoggingCallbacks rejects nothing, so the replay cannot stop early");
+			// Positions i+1..n-1, then the closing edge, filtered but not committed.
+			assert(checked_replay_pairs(cb.log) == n - i
+				&& "the replay covers the suffix from i+1 whatever j, so n - i moves");
+		}
+	}
+}
+
+void test_protocol_two_opt_replay() {
+	auto mat = make_mat4();
+	LoggingCallbacks cb;
+	Solver solver(mat, cb);
+
+	// Deliberately bad tour: 15+35+25+20 = 95, against 80 for the optimum.
+	// Reversing positions 2..3 gives [0,2,3,1] and recovers the 15.
+	std::vector<std::size_t> bad = {0, 2, 1, 3};
+	solver.set_tour(bad);
+	assert(solver.cost() == 95 && "set_tour must cost the sum of its edges");
+
+	cb.log.clear();  // set_tour rebuilds through move_prepare alone, without filtering
+	solver.two_opt();
+	assert(solver.cost() == 80 && "two_opt must apply the improving reversal");
+
+	// A candidate scored by a direct delta would leave this log empty, and
+	// replaying the pipeline again on accept, instead of committing the staged
+	// evaluation, would break the alternation.
+	assert(checked_replay_pairs(cb.log) > 0
+		&& "two_opt must score its candidates through the variant pipeline");
 }
 
 // ---------------------------------------------------------------------------
@@ -611,6 +669,8 @@ int main() {
 		// Protocol
 		{"protocol_nn_logging",          test_protocol_nn_logging},
 		{"protocol_nn_n1",              test_protocol_nn_n1},
+		{"protocol_reversal_replay",     test_protocol_reversal_replay},
+		{"protocol_two_opt_replay",      test_protocol_two_opt_replay},
 		// Unit - move_filter
 		{"move_filter_reject",           test_move_filter_reject},
 		// Unit - move_prepare
