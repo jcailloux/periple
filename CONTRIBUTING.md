@@ -39,7 +39,7 @@ Every algorithm uses the same pipeline to evaluate candidate moves:
 
 Key Solver methods:
 
-- **`evaluate(city)`** -- runs the pipeline, returns `std::optional<double>` (nullopt if filtered). Does not modify observable state (writes to `mutable ctx_`).
+- **`evaluate_append(city)`** -- runs the pipeline, returns `std::optional<double>` (nullopt if filtered). Does not modify observable state (writes to `mutable ctx_`).
 - **`append(city)`** -- runs init + prepare, applies the move (places city, updates cost), commits dimension state.
 - **`rebuild_and_cost(tour)`** -- replays a complete tour through the pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. Used by `set_tour`, `resume_at`, `clear`.
 - **`finalize_closing_edge()`** -- adds the return-to-start edge cost for complete tours.
@@ -67,7 +67,7 @@ Algorithms are defined inline in `algorithms/*.hpp`. Each algorithm header inclu
 Constructive algorithms use `greedy_construct` with a strategy:
 
 ```cpp
-// NearestSelector calls solver.evaluate() in a loop, picks the minimum.
+// NearestSelector calls solver.evaluate_append() in a loop, picks the minimum.
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::nearest_neighbor(NearestNeighborParams params) -> Solver& {
     return greedy_construct(NearestSelector{}, ConstructParams{...});
@@ -128,7 +128,7 @@ namespace periple {
 
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::two_opt(TwoOptParams params) -> Solver& {
-    // Use evaluate(), append(), ctx_.init(), invoke_prepare(), invoke_filter()
+    // Use evaluate_append(), append(), ctx_.init(), invoke_prepare(), invoke_filter()
     // Set status_ to SolutionStatus::feasible for heuristics,
     //   SolutionStatus::optimal for exact solvers.
 }

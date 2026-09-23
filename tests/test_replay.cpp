@@ -3,6 +3,7 @@
 #include <periple/variants/service_times.hpp>
 #include <solver_test_access.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <type_traits>
@@ -603,6 +604,123 @@ void test_committed_read_during_staging() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 20: evaluate_reversal matches the replay written by hand
+// ---------------------------------------------------------------------------
+
+void test_reversal_matches_manual_replay() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 5}, {0, 100}, {0, 100}
+	};
+	time_windows::Relaxed relaxed(windows, 10);
+	Solver solver(mat, relaxed);
+	solver.nearest_neighbor();
+
+	const auto tour = solver.tour();
+	for (std::size_t i = 0; i + 1 < tour.size(); ++i) {
+		for (std::size_t j = i + 1; j < tour.size(); ++j) {
+			const TwoOptMove<std::size_t> move{i, j};
+			const auto manual = solver.evaluate_replay(move.city_at(tour), i + 1,
+			                                           solver.prefix_cost(i));
+			solver.discard_staging();
+			const auto direct = solver.evaluate_reversal(i, j);
+			solver.discard_staging();
+			assert(manual.has_value() && direct.has_value()
+				&& "evaluate_reversal: Relaxed never rejects");
+			assert(*manual == *direct
+				&& "evaluate_reversal: cost must match the manual replay");
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 21: accept_reversal lands where a full set_tour would
+// ---------------------------------------------------------------------------
+
+template <typename Mat, typename Variant>
+void check_accept_reversal(const Mat& mat, const Variant& variant) {
+	Solver sized(mat, variant);
+	sized.nearest_neighbor();
+	const std::size_t n = sized.size();
+
+	for (std::size_t i = 0; i + 1 < n; ++i) {
+		for (std::size_t j = i + 1; j < n; ++j) {
+			Solver solver(mat, variant);
+			solver.nearest_neighbor();
+
+			std::vector<std::size_t> reversed(solver.tour().begin(), solver.tour().end());
+			std::reverse(reversed.begin() + static_cast<std::ptrdiff_t>(i + 1),
+			             reversed.begin() + static_cast<std::ptrdiff_t>(j) + 1);
+
+			const auto scored = solver.evaluate_reversal(i, j);
+			if (!scored) {  // filtered out: covered by test 22
+				solver.discard_staging();
+				continue;
+			}
+			run_checked(solver, [&] { solver.accept_reversal(i, j, *scored); });
+
+			Solver verifier(mat, variant);
+			verifier.set_tour(reversed);
+			assert(std::equal(reversed.begin(), reversed.end(),
+			                  solver.tour().begin(), solver.tour().end())
+				&& "accept_reversal: tour must be the reversed tour");
+			assert(solver.cost() == verifier.cost()
+				&& "accept_reversal: cost must match a full set_tour");
+			// The committed dimensions must describe the new tour, not the old.
+			const auto self = solver.evaluate_replay(solver.tour(), 1, 0);
+			solver.discard_staging();
+			assert(self.has_value() && *self == solver.cost()
+				&& "accept_reversal: self-replay must match");
+		}
+	}
+}
+
+void test_accept_reversal_relaxed() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 5}, {0, 100}, {0, 100}
+	};
+	check_accept_reversal(mat, time_windows::Relaxed(windows, 10));
+}
+
+void test_accept_reversal_strict() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 200}, {0, 200}, {0, 200}, {0, 200}
+	};
+	check_accept_reversal(mat, time_windows::Strict(windows));
+}
+
+// ---------------------------------------------------------------------------
+// Test 22: a rejected reversal leaves the tour untouched
+// ---------------------------------------------------------------------------
+
+void test_reversal_rejected_keeps_tour() {
+	auto mat = make_mat4();
+	// NN tour [0,1,3,2]; reversing positions 2..3 puts city 3 last, arrival 75.
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 100}, {0, 100}, {0, 40}
+	};
+	time_windows::Strict tw(windows);
+	Solver solver(mat, tw);
+	solver.nearest_neighbor();
+	assert(solver.status() == SolutionStatus::feasible && "setup: NN tour must be feasible");
+
+	const std::vector<std::size_t> before(solver.tour().begin(), solver.tour().end());
+	const auto cost_before = solver.cost();
+
+	assert(!solver.evaluate_reversal(1, 3).has_value()
+		&& "rejected reversal: the window must filter it out");
+	solver.discard_staging();
+
+	assert(std::equal(before.begin(), before.end(),
+	                  solver.tour().begin(), solver.tour().end())
+		&& "rejected reversal: the tour must be intact");
+	assert(solver.cost() == cost_before && "rejected reversal: the cost must be intact");
+	assert_tour_invariants(solver);
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -644,6 +762,11 @@ int main() {
 		{"prefix_cost_pos0_ignores_delta",     test_prefix_cost_pos0_ignores_delta},
 		{"context_auto_cumulative_cost",       test_context_auto_cumulative_cost},
 		{"committed_read_during_staging",      test_committed_read_during_staging},
+		// Segment reversal
+		{"reversal_matches_manual_replay",     test_reversal_matches_manual_replay},
+		{"accept_reversal_relaxed",            test_accept_reversal_relaxed},
+		{"accept_reversal_strict",             test_accept_reversal_strict},
+		{"reversal_rejected_keeps_tour",       test_reversal_rejected_keeps_tour},
 	};
 
 	for (const auto& t : tests) {

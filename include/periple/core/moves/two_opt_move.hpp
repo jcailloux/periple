@@ -4,9 +4,13 @@
 
 namespace periple {
 
+// Coordinate change for a segment reversal: positions i+1..j read backwards,
+// every other position unchanged, without touching the tour. It feeds the
+// replay that scores a candidate reversal (Solver::evaluate_reversal); should
+// dimensions ever score a reversal in O(1), this is the move they would take.
 template <typename CityT>
 struct TwoOptMove {
-	std::size_t i; // last unchanged position before reversal
+	std::size_t i; // last unchanged position before the reversal
 	std::size_t j; // last reversed position
 
 	template <typename Tour>
@@ -17,16 +21,6 @@ struct TwoOptMove {
 			    : tour[pos];
 		};
 	}
-
-	template <typename Position>
-	auto position_of(const Position& position) const {
-		return [&position, i = i, j = j](CityT city) -> std::size_t {
-			auto pos = position[static_cast<std::size_t>(city)];
-			return (pos > i && pos <= j) ? i + j + 1 - pos : pos;
-		};
-	}
-
-	std::size_t from_pos() const { return i + 1; }
 };
 
 } // namespace periple

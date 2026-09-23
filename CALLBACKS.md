@@ -167,7 +167,7 @@ Builds a tour one city at a time. The strategy decides which city to append next
 
 **Required**: `select_next` returning `std::optional<city_type>`. Return `std::nullopt` to stop construction (the tour remains partial).
 
-The strategy receives a const reference to the Solver, giving access to `tour()`, `position()`, `is_visited()`, `evaluate()`, and `distance()`:
+The strategy receives a const reference to the Solver, giving access to `tour()`, `position()`, `is_visited()`, `evaluate_append()`, and `distance()`:
 
 ```cpp
 struct FarthestSelector {
@@ -175,7 +175,7 @@ struct FarthestSelector {
     auto select_next(const periple::Solver<Dist, Variant>& solver) const
         -> std::optional<typename periple::dist_traits<Dist>::city_type>
     {
-        // Use solver.evaluate(city), solver.distance(a, b), etc.
+        // Use solver.evaluate_append(city), solver.distance(a, b), etc.
     }
 };
 
@@ -184,7 +184,7 @@ solver.greedy_construct(FarthestSelector{});
 
 ### `NearestSelector`
 
-Built-in strategy for `greedy_construct`. Iterates unvisited cities, calls `solver.evaluate()` (which runs the full variant pipeline: init -> prepare -> filter -> score), and picks the minimum. This is what `nearest_neighbor()` uses internally.
+Built-in strategy for `greedy_construct`. Iterates unvisited cities, calls `solver.evaluate_append()` (which runs the full variant pipeline: init -> prepare -> filter -> score), and picks the minimum. This is what `nearest_neighbor()` uses internally.
 
 ```cpp
 // These are equivalent:

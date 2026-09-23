@@ -114,7 +114,30 @@ int main() {
 	assert(solver.tour()[0] == 2 && "rotate_to_front must be idempotent");
 	assert(solver.cost() == tour_cost && "an idempotent rotation must not change the cost");
 
+	// --- path_cost ---
+	// Sub-path costs on an asymmetric matrix, both ways, and invalidation: a new
+	// tour must never be measured with the previous tour's prefixes.
+	periple::DistanceMatrix<int> asym4(4, {
+		 0,  1,  2,  3,
+		10,  0,  4,  5,
+		20, 40,  0,  6,
+		30, 50, 60,  0
+	});
+	solver.set_matrix(asym4);
+	std::vector<std::size_t> path = {0, 1, 2, 3};
+	solver.set_tour(path);
+	assert(solver.path_cost(2, 2) == 0 && "path_cost: an empty sub-path costs nothing");
+	assert(solver.path_cost(0, 3) == 1 + 4 + 6 && "path_cost: forward over the whole path");
+	assert(solver.path_cost(1, 3) == 4 + 6 && "path_cost: forward from an inner position");
+	assert(solver.path_cost(3, 0) == 60 + 40 + 10 && "path_cost: backward over the whole path");
+	assert(solver.path_cost(2, 1) == 40 && "path_cost: backward over one edge");
+
+	std::vector<std::size_t> other = {0, 2, 1, 3};
+	solver.set_tour(other);
+	assert(solver.path_cost(0, 2) == 2 + 40 && "path_cost: a new tour invalidates the prefixes");
+
 	// --- symmetric ---
+	solver.set_matrix(mat);
 	assert(!solver.symmetric());
 
 	// set_symmetric(true) on a symmetric matrix succeeds.
