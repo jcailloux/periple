@@ -17,3 +17,4 @@
 #include <periple/algorithms/greedy_construct.hpp>
 #include <periple/algorithms/nearest_neighbor.hpp>
 #include <periple/algorithms/held_karp.hpp>
+#include <periple/algorithms/two_opt.hpp>

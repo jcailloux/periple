@@ -31,6 +31,7 @@ auto Solver<Dist, Variant>::greedy_construct(
 		const auto k = params.resume_at;
 		ensure_capacity(total);
 		n_ = k;
+		++tour_version_;
 		cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), k));
 		std::fill_n(visited_.data(), total, uint8_t{0});
 		for (std::size_t i = 0; i < k; ++i)

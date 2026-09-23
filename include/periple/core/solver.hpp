@@ -3,6 +3,8 @@
 #include <periple/core/dimensions.hpp>
 #include <periple/core/log.hpp>
 #include <periple/core/caches/hk_cache.hpp>
+#include <periple/core/active_queue.hpp>
+#include <periple/core/local_search_mode.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -28,6 +30,11 @@ struct HeldKarpParams {};
 struct ConstructParams {
 	std::size_t start_city = 0;
 	std::size_t resume_at = 0;
+};
+
+struct TwoOptParams {
+	std::size_t neighbors = 10;  // candidate list size per city (0 = all cities)
+	std::size_t max_moves = 0;   // stop after this many applied moves (0 = no limit)
 };
 
 // ---------------------------------------------------------------------------
@@ -75,6 +82,12 @@ public:
 	[[nodiscard]] auto distance(city_type i, city_type j) const -> cost_type;
 	void set_tour(std::span<const city_type> tour);
 	void set_tour(std::span<const city_type> tour, cost_type known_cost);
+
+	// Rotates a complete tour so that city comes first, at equal cost. Only
+	// without a variant: rotating changes the traversal order, hence arrival
+	// times and penalties. Useful after two_opt() in symmetric mode, which
+	// treats the tour as a cycle and does not preserve its first city.
+	void rotate_to_front(city_type city);
 	void set_symmetric(bool sym);
 	void set_symmetric(bool sym, unchecked_t);
 
@@ -130,6 +143,8 @@ public:
 	auto greedy_construct(Strategy strategy,
 	                      ConstructParams params = {}) -> Solver&;
 
+	auto two_opt(TwoOptParams params = {}) -> Solver&;
+
 #ifdef PERIPLE_TESTING
 	template <DistanceSource D, typename V> friend class SolverTestAccess;
 #endif
@@ -143,6 +158,18 @@ private:
 	void check_symmetry() const;
 	auto rebuild_and_cost(std::span<const city_type> t) -> cost_type;
 	void close_tour();
+
+	// Local search primitives (shared by improvement algorithms)
+	void ensure_path_costs();
+	void rebuild_path_costs(std::size_t from);
+	void reverse_range(std::size_t lo, std::size_t hi);
+	void reverse_cyclic(std::size_t from, std::size_t len);
+
+	template <detail::LocalSearchMode Mode>
+	void two_opt_run(const TwoOptParams& params);
+
+	template <detail::LocalSearchMode Mode>
+	auto two_opt_improve(city_type a, std::size_t k, detail::ActiveQueue<city_type>& active) -> bool;
 
 	auto variant_ref() const -> const Variant& {
 		if constexpr (std::is_same_v<Variant, NoCallbacks>) {
@@ -167,13 +194,19 @@ private:
 	bool           symmetric_  = false;
 	std::vector<city_type> tour_;
 	cost_type      cost_       = {};
+	std::size_t    tour_version_ = 0;  // Incremented by every write to tour_ or n_.
 
 	// Workspace (grow-only)
 	std::vector<city_type> position_;  // Inverse index: city -> position in tour.
 	std::vector<uint8_t>   visited_;   // visited_[c] == (c is in tour); maintained like position_.
 	std::vector<uint8_t>   dont_look_;
+	std::vector<city_type> queue_;     // ActiveQueue slots.
 	std::vector<city_type> neighbors_;
 	std::size_t            neighbors_k_ = 0;
+
+	// Tour-derived, valid iff path_costs_version_ == tour_version_.
+	std::vector<cost_type> path_fwd_, path_bwd_;
+	std::size_t            path_costs_version_ = 0;
 
 	// Evaluation context (mutable: evaluate() is const)
 	mutable context_type ctx_;
@@ -204,6 +237,7 @@ void Solver<Dist, Variant>::set_matrix(const Dist& dist) {
 	status_ = SolutionStatus::none;
 	n_      = 0;
 	cost_   = {};
+	++tour_version_;
 	ctx_.reset();
 	invalidate_caches();
 	if (symmetric_) check_symmetry();
@@ -219,6 +253,7 @@ void Solver<Dist, Variant>::clear() {
 	status_ = SolutionStatus::none;
 	n_      = 0;
 	cost_   = {};
+	++tour_version_;
 	ctx_.reset();
 }
 
@@ -299,6 +334,7 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 	ensure_capacity(total);
 	n_ = t.size();
 	std::copy(t.begin(), t.end(), tour_.begin());
+	++tour_version_;
 
 	if (n_ > 0) {
 		cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
@@ -334,6 +370,83 @@ void Solver<Dist, Variant>::rebuild_position() {
 	for (std::size_t i = 0; i < n_; ++i)
 		position_[static_cast<std::size_t>(tour_[i])] =
 			static_cast<city_type>(i);
+}
+
+// Reverses tour_[lo..hi] in place and refreshes position_ for that range.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::reverse_range(std::size_t lo, std::size_t hi) {
+	std::reverse(tour_.begin() + static_cast<std::ptrdiff_t>(lo),
+	             tour_.begin() + static_cast<std::ptrdiff_t>(hi) + 1);
+	for (std::size_t p = lo; p <= hi; ++p)
+		position_[static_cast<std::size_t>(tour_[p])] = static_cast<city_type>(p);
+	++tour_version_;
+}
+
+// Reverses the cyclic segment of len positions starting at from, wrapping past
+// the end of the tour.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::reverse_cyclic(std::size_t from, std::size_t len) {
+	std::size_t lo = from;
+	std::size_t hi = from + len - 1;
+	if (hi >= n_) hi -= n_;
+	for (std::size_t s = 0; s < len / 2; ++s) {
+		std::swap(tour_[lo], tour_[hi]);
+		position_[static_cast<std::size_t>(tour_[lo])] = static_cast<city_type>(lo);
+		position_[static_cast<std::size_t>(tour_[hi])] = static_cast<city_type>(hi);
+		lo = (lo + 1 == n_) ? 0 : lo + 1;
+		hi = (hi == 0) ? n_ - 1 : hi - 1;
+	}
+	++tour_version_;
+}
+
+// O(n), and O(1) when the city is already first: position_ locates it, so
+// nothing has to be searched for.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::rotate_to_front(city_type city) {
+	static_assert(!has_callbacks,
+		"rotate_to_front: only without a variant (rotating changes the traversal order)");
+	assert((status_ == SolutionStatus::feasible || status_ == SolutionStatus::optimal)
+		&& "rotate_to_front: requires a complete tour");
+	assert(static_cast<std::size_t>(city) < dist_->size()
+		&& "rotate_to_front: city index out of bounds");
+
+	const auto p = static_cast<std::size_t>(position_[static_cast<std::size_t>(city)]);
+	if (p == 0) return;
+	std::rotate(tour_.begin(), tour_.begin() + static_cast<std::ptrdiff_t>(p),
+	            tour_.begin() + static_cast<std::ptrdiff_t>(n_));
+	rebuild_position();
+	++tour_version_;
+}
+
+// Prefix costs of the tour path in both directions:
+//   path_fwd_[q] = sum of d(t[p], t[p+1]) for p < q
+//   path_bwd_[q] = sum of d(t[p+1], t[p]) for p < q
+// They give the cost of any sub-path in O(1), in either direction, which is
+// what an asymmetric segment reversal needs. The closing edge is never inside
+// a reversed segment and is not included.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::ensure_path_costs() {
+	assert(n_ > 0 && "ensure_path_costs: empty tour");
+	if (path_costs_version_ == tour_version_) return;
+	if (path_fwd_.size() < n_) {
+		path_fwd_.resize(n_);
+		path_bwd_.resize(n_);
+	}
+	path_fwd_[0] = cost_type{};
+	path_bwd_[0] = cost_type{};
+	rebuild_path_costs(0);
+}
+
+// Recomputes entries after `from`, which must still be valid, and marks the
+// path costs as current.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::rebuild_path_costs(std::size_t from) {
+	const auto& dist = *dist_;
+	for (std::size_t q = from; q + 1 < n_; ++q) {
+		path_fwd_[q + 1] = path_fwd_[q] + dist(tour_[q], tour_[q + 1]);
+		path_bwd_[q + 1] = path_bwd_[q] + dist(tour_[q + 1], tour_[q]);
+	}
+	path_costs_version_ = tour_version_;
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -500,6 +613,7 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 	visited_[static_cast<std::size_t>(city)] = 1;
 	position_[static_cast<std::size_t>(city)] = static_cast<city_type>(n_);
 	++n_;
+	++tour_version_;
 
 	ctx_.commit(move);
 
@@ -621,6 +735,7 @@ void Solver<Dist, Variant>::accept_replay(
 	for (std::size_t i = from_pos; i < n_; ++i)
 		position_[static_cast<std::size_t>(tour_[i])] = static_cast<city_type>(i);
 	cost_ = new_cost;
+	++tour_version_;
 }
 
 // --- Tour import with known cost --------------------------------------------
@@ -645,6 +760,7 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t,
 	ensure_capacity(total);
 	n_ = t.size();
 	std::copy(t.begin(), t.end(), tour_.begin());
+	++tour_version_;
 
 	// Rebuild dimensions (the cost is overridden below).
 	if (n_ > 0)

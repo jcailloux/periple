@@ -1,8 +1,19 @@
 #include <periple/periple.hpp>
+#include <solver_test_access.hpp>
 
 #include <cassert>
 #include <cstddef>
+#include <optional>
 #include <vector>
+
+// Appends nothing, so greedy_construct(resume_at) only truncates the tour.
+struct StopImmediately {
+	template <periple::DistanceSource Dist, typename Variant>
+	auto select_next(const periple::Solver<Dist, Variant>&) const
+		-> std::optional<typename periple::dist_traits<Dist>::city_type> {
+		return std::nullopt;
+	}
+};
 
 int main() {
 	periple::DistanceMatrix<int> mat(4, {
@@ -71,6 +82,37 @@ int main() {
 	assert(solver.tour()[0] == 2);
 	solver.nearest_neighbor({.start_city = 0});
 	assert(solver.tour()[0] == 0);
+
+	// --- tour_version_ contract ---
+	// run_checked asserts that a call changing the tour changes tour_version_.
+	// Without the bump a tour-derived cache stays marked valid for a tour it no
+	// longer describes, which no observable behaviour would reveal.
+	solver.set_matrix(mat);
+	periple::run_checked(solver, [&] { solver.append(0); });
+	periple::run_checked(solver, [&] { solver.append(2); });
+	periple::run_checked(solver, [&] { solver.set_tour(manual); });
+	periple::run_checked(solver, [&] { solver.set_tour(partial, 25); });
+	periple::run_checked(solver, [&] { solver.clear(); });
+	periple::run_checked(solver, [&] { solver.nearest_neighbor(); });
+	// resume_at truncates the tour without appending anything.
+	periple::run_checked(solver, [&] {
+		solver.greedy_construct(StopImmediately{}, {.resume_at = 2});
+	});
+	assert(solver.tour().size() == 2 && "resume_at must truncate the tour");
+	periple::run_checked(solver, [&] { solver.set_matrix(mat); });
+
+	// --- rotate_to_front ---
+	// A rotation reads the same directed cycle from another starting point, so
+	// the cost is preserved whether or not the matrix is symmetric.
+	solver.set_matrix(mat);
+	solver.nearest_neighbor();
+	const auto tour_cost = solver.cost();
+	periple::run_checked(solver, [&] { solver.rotate_to_front(2); });
+	assert(solver.tour()[0] == 2 && "rotate_to_front must put the city first");
+	assert(solver.cost() == tour_cost && "rotating a cycle must not change its cost");
+	periple::run_checked(solver, [&] { solver.rotate_to_front(2); });
+	assert(solver.tour()[0] == 2 && "rotate_to_front must be idempotent");
+	assert(solver.cost() == tour_cost && "an idempotent rotation must not change the cost");
 
 	// --- symmetric ---
 	assert(!solver.symmetric());

@@ -36,6 +36,7 @@ struct CumulativeCost {
 	void discard_staging() { costs.discard_staging(); }
 	void save_staging(std::size_t to) { costs.save_staging(to); }
 	void commit_staging(std::size_t to) { costs.commit(to); }
+	[[nodiscard]] bool staging_active() const { return costs.staging_active(); }
 
 	// --- AppendMove ----------------------------------------------------------
 
