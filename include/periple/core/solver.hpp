@@ -84,10 +84,10 @@ public:
 	void set_tour(std::span<const city_type> tour);
 	void set_tour(std::span<const city_type> tour, cost_type known_cost);
 
-	// Rotates a complete tour so that city comes first, at equal cost. Only
-	// without a variant: rotating changes the traversal order, hence arrival
-	// times and penalties. Useful after two_opt() in symmetric mode, which
-	// treats the tour as a cycle and does not preserve its first city.
+	// Rotates a complete tour so that city comes first, at equal cost, O(n).
+	// Only without a variant: rotating changes the traversal order, hence
+	// arrival times and penalties. Useful after two_opt() in symmetric mode,
+	// which treats the tour as a cycle and does not preserve its first city.
 	void rotate_to_front(city_type city);
 	void set_symmetric(bool sym);
 	void set_symmetric(bool sym, unchecked_t);
@@ -136,8 +136,8 @@ public:
 
 	// Raw distance along the tour between two positions, following tour order
 	// when from <= to and going against it otherwise. O(1), after a lazy O(n)
-	// build. Penalties are excluded, prefix_cost being the variant-aware
-	// counterpart, so this is for variant-free local search.
+	// build. Penalties are excluded; prefix_cost is the variant-aware
+	// counterpart.
 	[[nodiscard]] auto path_cost(std::size_t from, std::size_t to) -> cost_type;
 
 	// Staging lifecycle for local search.
@@ -424,8 +424,6 @@ void Solver<Dist, Variant>::reverse_cyclic(std::size_t from, std::size_t len) {
 	++tour_version_;
 }
 
-// O(n), and O(1) when the city is already first: position_ locates it, so
-// nothing has to be searched for.
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::rotate_to_front(city_type city) {
 	static_assert(!has_callbacks,

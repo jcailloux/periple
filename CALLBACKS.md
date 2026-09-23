@@ -219,8 +219,9 @@ Any variant gets a `CumulativeCost` dimension automatically. It holds the commit
 | `accept_reversal(i, j, cost)` | Applies a scored reversal: commits the staged dimensions, then reverses. O(j - i) |
 | `evaluate_replay(city_at, from, prefix)` | Same for an arbitrary rewrite: `city_at(pos)` returns the candidate city at each position |
 | `accept_replay(city_at, from, cost)` | Applies a scored rewrite. `city_at` must not read `solver.tour()`, which it overwrites as it goes |
+| `save_staging()` | Keeps the current evaluation as the candidate to commit, so a further one does not overwrite it. Best improvement needs it, first improvement does not |
 | `discard_staging()` | Drops a staged evaluation that was not accepted |
-| `path_cost(from, to)` | Raw distance along the tour between two positions, either direction. O(1), without a variant |
+| `path_cost(from, to)` | Raw distance along the tour between two positions, either direction. O(1), requires no variant |
 
 A complete operator, first improvement over the neighbor lists:
 

@@ -5,10 +5,9 @@
 // Bentley (1992), "Fast Algorithms for Geometric Traveling Salesman Problems"
 //
 // FIFO over the n cities, each present at most once, flags[c] == 0 marking
-// membership. Local search shows in the pop/deactivate split rather than in
-// the buffer: a popped city keeps its flag clear while it is being scanned, so
-// moves found from it do not re-enqueue it, and only deactivate() makes it
-// queueable again. A plain worklist would clear the flag on pop.
+// membership. A popped city keeps its flag clear while it is being scanned, so
+// the moves found from it do not re-enqueue it; deactivate() makes it
+// queueable again.
 //
 // Non-owning view over two Solver workspace buffers of size n.
 

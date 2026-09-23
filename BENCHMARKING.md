@@ -76,4 +76,4 @@ Register it in the shared algorithm registry (`include/periple/algorithms/regist
 
 ## Symmetric TSP only
 
-All benchmarks target the symmetric TSP (d(i,j) = d(j,i)). The runner declares it on the solver (`set_symmetric(true, periple::unchecked)`), which is what gives local search its O(1) evaluation path. periple handles asymmetric instances via the Jonker-Volgenant transformation (N cities -> 2N symmetric cities), but the inherent overhead of this transformation would add noise to comparison tables rather than insight.
+All benchmarks target the symmetric TSP (d(i,j) = d(j,i)). The runner declares it on the solver (`set_symmetric(true, periple::unchecked)`), so local search timings are those of its symmetric path, not of the directed fallback. periple handles asymmetric instances via the Jonker-Volgenant transformation (N cities -> 2N symmetric cities), but the inherent overhead of this transformation would add noise to comparison tables rather than insight.
