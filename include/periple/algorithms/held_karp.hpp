@@ -112,6 +112,7 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
 	if (best_cost == INF) {
 		n_ = 0;
 		cost_ = {};
+		++tour_version_;
 		status_ = SolutionStatus::infeasible;
 		return *this;
 	}
@@ -125,6 +126,7 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
 		S ^= (std::size_t{1} << cur);
 	}
 	std::fill_n(visited_.data(), n_, uint8_t{1});
+	++tour_version_;
 
 	cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
 	status_ = SolutionStatus::optimal;

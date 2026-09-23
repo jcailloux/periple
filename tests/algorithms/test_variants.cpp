@@ -73,14 +73,6 @@ auto pure_distance_cost(const Dist& dist, std::span<const typename dist_traits<D
 	return total;
 }
 
-// Invariants every algorithm must leave in place, whatever the final status.
-template <DistanceSource Dist, typename Variant>
-void assert_tour_invariants(const Solver<Dist, Variant>& solver) {
-	SolverTestAccess access(solver);
-	assert(access.position_consistent() && "position_ must match tour_");
-	assert(access.visited_consistent() && "visited_ must match tour_");
-}
-
 // Verify that arrival times respect all time windows.
 template <DistanceSource Dist>
 bool tour_respects_windows(
@@ -108,8 +100,7 @@ template <typename Algo, DistanceSource Dist>
 void test_strict(const Algo& algo, const Dist& dist, std::span<const time_windows::TimeWindow> windows) {
 	time_windows::Strict tw(windows);
 	Solver solver(dist, tw);
-	algo(solver);
-	assert_tour_invariants(solver);
+	run_checked(solver, [&] { algo(solver); });
 
 	if (solver.status() == SolutionStatus::partial ||
 	    solver.status() == SolutionStatus::infeasible) {
@@ -150,8 +141,7 @@ template <typename Algo, DistanceSource Dist>
 void test_relaxed(const Algo& algo, const Dist& dist, std::span<const time_windows::TimeWindow> windows, int penalty_weight) {
 	time_windows::Relaxed relaxed(windows, penalty_weight);
 	Solver solver(dist, relaxed);
-	algo(solver);
-	assert_tour_invariants(solver);
+	run_checked(solver, [&] { algo(solver); });
 
 	assert_valid_tour(dist, solver.tour());
 
@@ -197,8 +187,7 @@ void run_strict_optional(const Dist& dist) {
 		auto tw_span = std::span<const std::optional<time_windows::TimeWindow>>(windows);
 		time_windows::Strict tw(tw_span);
 		Solver solver(dist, tw);
-		algo(solver);
-		assert_tour_invariants(solver);
+		run_checked(solver, [&] { algo(solver); });
 
 		// All cities unconstrained except city 0 with generous window.
 		// Should always find a full tour.
@@ -216,8 +205,7 @@ void run_relaxed_optional(const Dist& dist) {
 	for_each_algorithm(nullptr, [&](const auto& algo) {
 		time_windows::Relaxed relaxed(std::span<const std::optional<time_windows::TimeWindow>>(windows), 1000);
 		Solver solver(dist, relaxed);
-		algo(solver);
-		assert_tour_invariants(solver);
+		run_checked(solver, [&] { algo(solver); });
 
 		assert_valid_tour(dist, solver.tour());
 
@@ -228,6 +216,25 @@ void run_relaxed_optional(const Dist& dist) {
 		verifier.set_tour(tour_copy);
 		assert(verifier.cost() == solver.cost() && "relaxed optional cost must be self-consistent");
 	});
+}
+
+// ---------------------------------------------------------------------------
+// An infeasible exact solve drops the tour, which must bump tour_version_
+// ---------------------------------------------------------------------------
+
+void run_infeasible_held_karp() {
+	auto dist = make_sym4();
+	// Zero-width windows: nothing but the depot is reachable in time.
+	std::vector<time_windows::TimeWindow> windows(dist.size(), {0.0, 0.0});
+	time_windows::Strict tw{std::span<const time_windows::TimeWindow>(windows)};
+	Solver solver(dist, tw);
+
+	std::vector<std::size_t> prefix = {0, 2};
+	solver.set_tour(prefix);
+	run_checked(solver, [&] { solver.held_karp(); });
+
+	assert(solver.status() == SolutionStatus::infeasible && "setup: no complete tour is feasible");
+	assert(solver.tour().empty() && "an infeasible exact solve drops the tour");
 }
 
 // ---------------------------------------------------------------------------
@@ -273,5 +280,10 @@ int main() {
 	std::printf("tsptw_relaxed_optional_sym4 ... ");
 	std::fflush(stdout);
 	run_relaxed_optional(make_sym4());
+	std::printf("OK\n");
+
+	std::printf("tsptw_infeasible_held_karp ... ");
+	std::fflush(stdout);
+	run_infeasible_held_karp();
 	std::printf("OK\n");
 }

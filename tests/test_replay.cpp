@@ -1,6 +1,7 @@
 #include <periple/periple.hpp>
 #include <periple/variants/time_windows.hpp>
 #include <periple/variants/service_times.hpp>
+#include <solver_test_access.hpp>
 
 #include <cassert>
 #include <cstdio>
@@ -301,7 +302,9 @@ void test_save_and_accept() {
 	assert(result.has_value() && "save_and_accept: eval should succeed");
 
 	solver.save_staging();
-	solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
+	run_checked(solver, [&] {
+		solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
+	});
 
 	assert(solver.cost() == *result && "save_and_accept: cost must match");
 	assert(solver.tour()[2] == 2 && "save_and_accept: tour[2] must be updated");
@@ -335,7 +338,9 @@ void test_reject_then_accept() {
 	// Do NOT save_staging -- we want to accept tour A's record.
 
 	// Accept the recorded tour A.
-	solver.accept_replay([&](std::size_t i) { return tour_a[i]; }, 2, *cost_a);
+	run_checked(solver, [&] {
+		solver.accept_replay([&](std::size_t i) { return tour_a[i]; }, 2, *cost_a);
+	});
 
 	assert(solver.cost() == *cost_a && "reject_then_accept: cost must match tour_a");
 	assert(solver.tour()[2] == 2 && "reject_then_accept: tour must reflect tour_a");
@@ -360,7 +365,9 @@ void test_direct_commit() {
 	assert(result.has_value() && "direct commit: eval should succeed");
 
 	// Accept without save_staging -- commit takes staging directly.
-	solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
+	run_checked(solver, [&] {
+		solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
+	});
 
 	assert(solver.cost() == *result && "direct commit: cost must match");
 	assert(solver.tour()[2] == 2 && "direct commit: tour must be updated");

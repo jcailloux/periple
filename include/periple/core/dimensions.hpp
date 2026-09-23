@@ -127,6 +127,7 @@ struct EmptyContext {
 	void discard_staging() {}
 	void save_staging(std::size_t) {}
 	void commit_staging(std::size_t) {}
+	[[nodiscard]] bool staging_active() const { return false; }
 
 	struct Snapshot { double cost_delta; };
 	template <typename Move>
@@ -231,6 +232,17 @@ struct EvalContext {
 				if constexpr (requires { d.commit_staging(t); })
 					d.commit_staging(t);
 			}(ds, to)), ...);
+		}, dims_);
+	}
+
+	[[nodiscard]] bool staging_active() const {
+		return std::apply([](const auto&... ds) {
+			return (([]<typename D>(const D& d) {
+				if constexpr (requires { d.staging_active(); })
+					return d.staging_active();
+				else
+					return false;
+			}(ds)) || ...);
 		}, dims_);
 	}
 

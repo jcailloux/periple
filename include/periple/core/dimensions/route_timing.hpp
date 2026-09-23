@@ -41,6 +41,7 @@ struct RouteTiming {
 	void discard_staging() { departures.discard_staging(); }
 	void save_staging(std::size_t to) { departures.save_staging(to); }
 	void commit_staging(std::size_t to) { departures.commit(to); }
+	[[nodiscard]] bool staging_active() const { return departures.staging_active(); }
 
 	// --- AppendMove (constructive) ----------------------------------------
 

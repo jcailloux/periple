@@ -78,6 +78,9 @@ public:
 
 	void discard_record() { has_record_ = false; }
 
+	// True while staged or recorded values are pending.
+	bool staging_active() const { return staging_ || has_record_; }
+
 private:
 	std::vector<T> committed_;
 	std::vector<T> staged_;
