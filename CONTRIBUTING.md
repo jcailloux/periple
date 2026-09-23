@@ -94,7 +94,7 @@ Exact algorithms (Held-Karp) use the pipeline directly with `DPMove`.
 
 Three rules follow:
 
-- `tour_` and `n_` are written only by the primitives (`append`, `set_tour`, `held_karp`, `accept_replay`, `accept_reversal`, `reverse_range`, `reverse_cyclic`), each of which increments `tour_version_`. A cache derived from the tour compares its own version against it, so a missing increment leaves that cache marked valid for a tour it no longer describes.
+- Every write to `tour_` or `n_` increments `tour_version_`. Write through the existing primitives (`append`, `set_tour`, `accept_replay`, `accept_reversal`, `reverse_range`, `reverse_cyclic`), which do it for you; an algorithm that fills the tour itself, as `held_karp` does, increments it itself. A cache derived from the tour compares its own version against it, so a missing increment leaves that cache marked valid for a tour it no longer describes.
 - An algorithm never reads a workspace buffer it did not refresh in the same call.
 - Public accessors never expose the workspace category.
 

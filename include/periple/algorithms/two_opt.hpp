@@ -20,14 +20,14 @@
 //                 applied move. Only segments not containing position 0.
 //   replay     -- any variant. Candidates are evaluated by replaying the
 //                 suffix through the variant pipeline, O(n - i) each. Same
-//                 segment restriction. This mode uses nothing private:
-//                 evaluate_reversal and accept_reversal are the public pair a
-//                 user-written operator takes.
+//                 segment restriction; goes through the public
+//                 evaluate_reversal / accept_reversal pair.
 //
 // In the two directed modes a reversal also flips the direction of the edges
 // inside the segment, which the don't-look bits do not track (only the four
 // endpoints are reactivated). Calling two_opt() again can therefore still
-// improve the tour; in symmetric mode the first call reaches the fixed point.
+// improve the tour; in symmetric mode one call already reaches the fixed point
+// of the candidate neighborhood.
 
 #include <periple/core/solver.hpp>
 

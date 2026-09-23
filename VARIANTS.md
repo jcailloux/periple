@@ -93,7 +93,7 @@ solver.nearest_neighbor();
 
 `solver.cost()` returns the total distance plus penalties. When multiple windows exist, the violation is the minimum lateness across all windows.
 
-`two_opt` minimizes that same sum, so a reversal is accepted when it trades distance for a smaller penalty or the reverse.
+`two_opt` minimizes that same sum: it accepts a longer tour when the penalty drops by more than the added distance.
 
 ### Choosing penalty_weight
 

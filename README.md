@@ -123,7 +123,8 @@ solver.nearest_neighbor().two_opt();
 ```
 
 `two_opt()` improves a complete tour by reversing segments. Declaring symmetry
-unlocks its O(1) evaluation path:
+lets it search the full cycle neighborhood and reverse the shorter side, which
+is both faster and stronger than the directed search used otherwise:
 
 ```cpp
 solver.set_symmetric(true);
@@ -162,7 +163,7 @@ See [CALLBACKS.md](CALLBACKS.md) for the callback architecture and [VARIANTS.md]
 
 ATSP support: **full** = native asymmetric support, **adapted** = supported with different characteristics, **not yet** = symmetric only (use `jonker_volgenant()` to wrap your matrix).
 
-2-opt on an asymmetric instance only considers segments that do not wrap around the tour start, since reversing a segment changes the direction of the edges inside it.
+2-opt on an asymmetric instance only considers segments that do not wrap around the tour start, since reversing a segment changes the direction of the edges inside it. Those inner edges also change cost, which the don't-look bits do not track, so a further `two_opt()` call may still improve the tour.
 
 ### Generic frameworks
 

@@ -6,8 +6,7 @@ namespace periple {
 
 // Coordinate change for a segment reversal: positions i+1..j read backwards,
 // every other position unchanged, without touching the tour. It feeds the
-// replay that scores a candidate reversal (Solver::evaluate_reversal); should
-// dimensions ever score a reversal in O(1), this is the move they would take.
+// replay that scores a candidate reversal (Solver::evaluate_reversal).
 template <typename CityT>
 struct TwoOptMove {
 	std::size_t i; // last unchanged position before the reversal
