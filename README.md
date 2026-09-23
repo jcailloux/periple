@@ -122,6 +122,19 @@ Algorithm methods return `Solver&` for chaining:
 solver.nearest_neighbor().two_opt();
 ```
 
+`two_opt()` improves a complete tour by reversing segments. Declaring symmetry
+unlocks its O(1) evaluation path:
+
+```cpp
+solver.set_symmetric(true);
+solver.nearest_neighbor().two_opt({.neighbors = 10});
+```
+
+> [!NOTE]
+> In symmetric mode the tour is treated as a cycle, so an improving move may
+> reverse the segment containing the first city and `tour()[0]` can change.
+> `rotate_to_front(city)` puts a chosen city back in front, at equal cost.
+
 ### Variant callbacks
 
 Customize algorithm behavior without modifying internal logic. Variant callbacks are optional and zero-overhead when not used.
@@ -145,8 +158,11 @@ See [CALLBACKS.md](CALLBACKS.md) for the callback architecture and [VARIANTS.md]
 |-----------|----------|------------|--------------|
 | Nearest neighbor | Construction | O(n^2) | full |
 | Held-Karp | Exact | O(n^2 * 2^n) | full |
+| 2-opt | Improvement | O(n * k) per pass | adapted |
 
 ATSP support: **full** = native asymmetric support, **adapted** = supported with different characteristics, **not yet** = symmetric only (use `jonker_volgenant()` to wrap your matrix).
+
+2-opt on an asymmetric instance only considers segments that do not wrap around the tour start, since reversing a segment changes the direction of the edges inside it.
 
 ### Generic frameworks
 
@@ -276,6 +292,7 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 | `size()` | `std::size_t` | Number of cities |
 | `symmetric()` | `bool` | Whether the problem is declared symmetric |
 | `set_tour(span)` | `void` | Inject a tour (full or partial prefix) |
+| `rotate_to_front(city)` | `void` | Rotate a complete tour so `city` comes first, at equal cost |
 
 ### Algorithms
 
@@ -285,6 +302,7 @@ All algorithm methods return `Solver&` for chaining.
 |--------|-------------|
 | `nearest_neighbor(params)` | Construction heuristic |
 | `nearest_neighbor(variant, params)` | With variant callbacks |
+| `two_opt(params)` | 2-opt local search (`neighbors`: candidate list size, `max_moves`) |
 | `held_karp(params)` | Exact solver |
 | `held_karp(variant, params)` | With variant callbacks (`DPMove`: filter, eval, on_improve) |
 | `greedy_construct(strategy, params)` | Generic construction framework |

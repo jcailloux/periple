@@ -71,6 +71,16 @@ solver.nearest_neighbor();
 
 If all candidates are rejected at a given step, construction stops (partial tour). The Strict variant uses `RouteTiming` to track arrival and departure times.
 
+Local search applies the same filter. `two_opt` scores a candidate reversal by replaying the affected suffix, so a reversal that would violate a window is rejected and the tour stays feasible:
+
+```cpp
+solver.nearest_neighbor();
+if (solver.status() == periple::SolutionStatus::feasible)
+    solver.two_opt();
+```
+
+The guard is what makes the chain safe: under a hard constraint the construction can stop early, and there is then no complete tour to improve.
+
 ### Relaxed
 
 Soft constraint. Penalizes time window violations via `move_prepare` (adds `penalty_weight * violation` to `cost_delta`). Never rejects moves.
@@ -82,6 +92,8 @@ solver.nearest_neighbor();
 ```
 
 `solver.cost()` returns the total distance plus penalties. When multiple windows exist, the violation is the minimum lateness across all windows.
+
+`two_opt` minimizes that same sum, so a reversal is accepted when it trades distance for a smaller penalty or the reverse.
 
 ### Choosing penalty_weight
 
@@ -96,7 +108,8 @@ The default of 1000 is reasonable for typical TSPLIB-scale instances. Too low an
 Variants can be composed with `Composed` to combine multiple constraints:
 
 ```cpp
-#include <periple/periple.hpp>  // includes Composed, ServiceTimes, time_windows
+#include <periple/periple.hpp>            // Composed, ServiceTimes
+#include <periple/variants/time_windows.hpp>
 
 double durations[] = {0, 10, 0};
 periple::time_windows::TimeWindow windows[] = {{0, 100}, {0, 100}, {0, 12}};

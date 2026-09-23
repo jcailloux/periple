@@ -204,6 +204,49 @@ solver.nearest_neighbor({.resume_at = solver.tour().size()});  // completes from
 
 When resuming, `rebuild_and_cost` replays the prefix through the full pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. No manual state management is needed.
 
+## Local search and replay
+
+Local search does not append cities, it rewrites part of an existing tour. Instead of a second callback interface, Periple replays the changed suffix through the constructive pipeline: every position from the first changed one is evaluated as an `AppendMove`, so a variant written for `nearest_neighbor` works with `two_opt` unchanged.
+
+During a replay `ctx.tour()` and `ctx.position()` are empty spans, since the candidate tour exists nowhere yet, and `ctx.cost()` is the running cost of the candidate prefix.
+
+Any variant gets a `CumulativeCost` dimension automatically. It holds the committed cost of every prefix, which is what makes a partial replay possible: scoring a change at position `i` starts from `prefix_cost(i)` rather than replaying the whole tour.
+
+| Method | Description |
+|---|---|
+| `prefix_cost(pos)` | Committed cost of `tour[0..pos]`, penalties included. O(1) |
+| `evaluate_reversal(i, j)` | Cost of the tour with `tour[i+1..j]` reversed, `nullopt` if a filter rejects it. Leaves the evaluation staged. O(n - i) |
+| `accept_reversal(i, j, cost)` | Applies a scored reversal: commits the staged dimensions, then reverses. O(j - i) |
+| `evaluate_replay(city_at, from, prefix)` | Same for an arbitrary rewrite: `city_at(pos)` returns the candidate city at each position |
+| `accept_replay(city_at, from, cost)` | Applies a scored rewrite. `city_at` must not read `solver.tour()`, which it overwrites as it goes |
+| `discard_staging()` | Drops a staged evaluation that was not accepted |
+| `path_cost(from, to)` | Raw distance along the tour between two positions, either direction. O(1), without a variant |
+
+A complete operator, first improvement over the neighbor lists:
+
+```cpp
+// Reverses the first improving segment found. Returns false at a local optimum.
+template <typename Solver>
+bool improve_once(Solver& solver) {
+    const auto tour = solver.tour();
+    for (std::size_t i = 0; i + 2 < tour.size(); ++i) {
+        for (auto c : solver.neighbors(tour[i], 5)) {
+            const auto j = static_cast<std::size_t>(solver.position()[c]);
+            if (j < i + 2) continue;
+            const auto scored = solver.evaluate_reversal(i, j);
+            if (scored && *scored < solver.cost()) {
+                solver.accept_reversal(i, j, *scored);
+                return true;
+            }
+        }
+    }
+    solver.discard_staging();  // nothing accepted: drop the last evaluation
+    return false;
+}
+```
+
+`evaluate_reversal` and `accept_reversal` are the pair `two_opt` uses in replay mode. Without a variant there is nothing to stage: compute the delta from `path_cost` and pass the resulting cost to `accept_reversal`.
+
 ## Variant callbacks and symmetry
 
 Symmetry is a property of the **full problem** (distance matrix + variant callbacks), not of the distance matrix alone. Variant callbacks can break symmetry even on a symmetric matrix (e.g., direction-dependent time windows).
@@ -222,7 +265,7 @@ solver.set_symmetric(true, periple::unchecked);   // trust me, skip check
 |---|---|---|
 | Constructive (NN, greedy) | yes | yes |
 | Exact (Held-Karp) | yes | yes |
-| Local search (future) | yes | yes |
+| Local search (2-opt) | yes | yes (replayed as `AppendMove`) |
 
 ## Variants
 

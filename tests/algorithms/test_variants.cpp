@@ -133,6 +133,18 @@ void run_strict(const Dist& dist) {
 	});
 }
 
+// Zero-width windows: nothing but the start city can be reached in time, so the
+// construction stops after one city. An algorithm that improves a tour must
+// check that it got one, two_opt requiring a complete feasible tour.
+template <DistanceSource Dist>
+void run_strict_partial(const Dist& dist) {
+	std::vector<time_windows::TimeWindow> windows(dist.size(), {0.0, 0.0});
+
+	for_each_algorithm(nullptr, [&](const auto& algo) {
+		test_strict(algo, dist, windows);
+	});
+}
+
 // ---------------------------------------------------------------------------
 // TSPTW Relaxed x all algorithms
 // ---------------------------------------------------------------------------
@@ -255,6 +267,11 @@ int main() {
 	std::printf("tsptw_strict_asym4 ... ");
 	std::fflush(stdout);
 	run_strict(make_asym4());
+	std::printf("OK\n");
+
+	std::printf("tsptw_strict_partial_sym5 ... ");
+	std::fflush(stdout);
+	run_strict_partial(make_sym5());
 	std::printf("OK\n");
 
 	std::printf("tsptw_relaxed_sym4 ... ");
