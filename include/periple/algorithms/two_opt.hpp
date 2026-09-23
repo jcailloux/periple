@@ -20,7 +20,9 @@
 //                 applied move. Only segments not containing position 0.
 //   replay     -- any variant. Candidates are evaluated by replaying the
 //                 suffix through the variant pipeline, O(n - i) each. Same
-//                 segment restriction.
+//                 segment restriction. This mode uses nothing private:
+//                 evaluate_reversal and accept_reversal are the public pair a
+//                 user-written operator takes.
 //
 // In the two directed modes a reversal also flips the direction of the edges
 // inside the segment, which the don't-look bits do not track (only the four
@@ -28,7 +30,6 @@
 // improve the tour; in symmetric mode the first call reaches the fixed point.
 
 #include <periple/core/solver.hpp>
-#include <periple/core/moves/two_opt_move.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -173,7 +174,9 @@ auto Solver<Dist, Variant>::two_opt_improve(
 			if constexpr (Mode == LocalSearchMode::asymmetric) {
 				// Boundary edges, plus the inner edges t[i+1..j] which flip
 				// direction: they cost path_fwd_[j] - path_fwd_[i+1] now and
-				// path_bwd_[j] - path_bwd_[i+1] after the move.
+				// path_bwd_[j] - path_bwd_[i+1] after the move. Read here
+				// rather than through the public path_cost(from, to), which
+				// would add its version check to this O(1) loop.
 				const cost_type added   = dist(ti, tj) + dist(ti1, tj1)
 				                        + (path_bwd_[j] - path_bwd_[i + 1]);
 				const cost_type removed = dist(ti, ti1) + dist(tj, tj1)
@@ -184,12 +187,9 @@ auto Solver<Dist, Variant>::two_opt_improve(
 				cost_ += added;
 				cost_ -= removed;
 			} else {
-				const TwoOptMove<city_type> move{i, j};
-				const auto new_cost = evaluate_replay(move.city_at(tour_), i + 1, prefix_cost(i));
+				const auto new_cost = evaluate_reversal(i, j);
 				if (!new_cost || !(*new_cost < cost_)) return false;
-				ctx_.commit_staging(n_);
-				reverse_range(i + 1, j);
-				cost_ = *new_cost;
+				accept_reversal(i, j, *new_cost);
 			}
 			active.push(ti); active.push(ti1); active.push(tj); active.push(tj1);
 			return true;

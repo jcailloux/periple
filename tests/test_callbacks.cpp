@@ -566,17 +566,17 @@ void test_neighbors_invalidate() {
 }
 
 // ---------------------------------------------------------------------------
-// Unit: evaluate returns nullopt when filtered
+// Unit: evaluate_append returns nullopt when filtered
 // ---------------------------------------------------------------------------
 
-void test_evaluate_filtered() {
+void test_evaluate_append_filtered() {
 	auto mat = make_mat4();
 	RejectCity1 cb;
 	Solver solver(mat, cb);
 	solver.append(static_cast<std::size_t>(0));
 
-	assert(!solver.evaluate(1).has_value());
-	assert(solver.evaluate(2).has_value());
+	assert(!solver.evaluate_append(1).has_value());
+	assert(solver.evaluate_append(2).has_value());
 }
 
 // ---------------------------------------------------------------------------
@@ -639,8 +639,8 @@ int main() {
 		{"neighbors_basic",              test_neighbors_basic},
 		{"neighbors_grow",               test_neighbors_grow},
 		{"neighbors_invalidate",         test_neighbors_invalidate},
-		// Unit - evaluate
-		{"evaluate_filtered",            test_evaluate_filtered},
+		// Unit - evaluate_append
+		{"evaluate_append_filtered",     test_evaluate_append_filtered},
 		// Unit - position
 		{"position_accessor",            test_position_accessor},
 	};

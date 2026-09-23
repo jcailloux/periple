@@ -65,7 +65,7 @@ void test_service_times_shifts_departure() {
 	// After appending city 1 with service time 3:
 	// arrival at 1 = 5, departure = 5 + 3 = 8.
 	// Now evaluate city 2: arrival = 8 + 4 = 12.
-	auto score = solver.evaluate(2);
+	auto score = solver.evaluate_append(2);
 	assert(score.has_value());
 	// Score = dist(1,2) + cost_delta. cost_delta = 0 (service times
 	// only affect departure, not cost_delta). So score = 4.0.
