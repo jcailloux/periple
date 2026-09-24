@@ -3,6 +3,7 @@
 #include <periple/core/solver.hpp>
 #include <periple/algorithms/nearest_neighbor.hpp>
 #include <periple/algorithms/held_karp.hpp>
+#include <periple/algorithms/two_opt.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -38,8 +39,26 @@ struct AlgoHeldKarp {
 	void operator()(Solver<Dist, V>& s, unsigned = 0) const { s.held_karp(); }
 };
 
+// Improvement pipeline: nearest neighbor construction followed by 2-opt.
+// A strict variant can leave the construction partial or infeasible, in which
+// case there is nothing to improve.
+struct AlgoNNTwoOpt {
+	static constexpr const char* tag  = "2O";
+	static constexpr const char* name = "nn_two_opt";
+	static constexpr bool is_exact          = false;
+	static constexpr bool symmetric_only    = false;
+	static constexpr bool is_metaheuristic  = false;
+	static constexpr int  max_tier          = 5;
+
+	template <DistanceSource Dist, typename V>
+	void operator()(Solver<Dist, V>& s, unsigned = 0) const {
+		s.nearest_neighbor();
+		if (s.status() == SolutionStatus::feasible) s.two_opt();
+	}
+};
+
 // Master list -- add new algorithms here.
-using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp>;
+using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoNNTwoOpt>;
 
 // ---------------------------------------------------------------------------
 // Iteration helpers

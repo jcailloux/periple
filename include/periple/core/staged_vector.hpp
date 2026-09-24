@@ -30,6 +30,9 @@ public:
 		return (staging_ && i >= stage_from_) ? staged_[i] : committed_[i];
 	}
 
+	// Ground truth even while staging is active; dimension code uses operator[].
+	const T& committed(std::size_t i) const { return committed_[i]; }
+
 	void resize(std::size_t n) {
 		committed_.resize(n);
 		staged_.resize(n);
@@ -74,6 +77,8 @@ public:
 	}
 
 	void discard_record() { has_record_ = false; }
+
+	bool staging_active() const { return staging_ || has_record_; }
 
 private:
 	std::vector<T> committed_;

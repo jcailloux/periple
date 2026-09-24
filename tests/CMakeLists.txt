@@ -4,6 +4,8 @@ add_test(NAME distance_matrix COMMAND test_distance_matrix)
 
 add_executable(test_solver test_solver.cpp)
 target_link_libraries(test_solver PRIVATE periple::periple)
+target_compile_definitions(test_solver PRIVATE PERIPLE_TESTING)
+target_include_directories(test_solver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME solver COMMAND test_solver)
 
 add_executable(test_jonker_volgenant test_jonker_volgenant.cpp)

@@ -1,9 +1,12 @@
 #include <periple/periple.hpp>
 #include <periple/variants/time_windows.hpp>
 #include <periple/variants/service_times.hpp>
+#include <solver_test_access.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <type_traits>
 #include <vector>
 
 using namespace periple;
@@ -38,6 +41,27 @@ struct PenalizeCity1 {
 	void move_prepare(const AppendMove<std::size_t>& m, Ctx& ctx) const {
 		if (m.city == 1) ctx.cost_delta += 9999.0;
 	}
+};
+
+// Fractional parts accumulate past 1: summing in double before truncation
+// would diverge from Solver::append (per-edge cast to cost_type).
+struct FractionalPenalty {
+	template <typename Ctx>
+	void move_prepare(const AppendMove<std::size_t>& m, Ctx& ctx) const {
+		ctx.cost_delta += 0.6 + 0.1 * static_cast<double>(m.city);
+	}
+};
+
+struct FlatPenalty {
+	template <typename Ctx>
+	void move_prepare(const AppendMove<std::size_t>&, Ctx& ctx) const {
+		ctx.cost_delta += 7.0;
+	}
+};
+
+// Explicitly declares CumulativeCost: context_for must not duplicate it.
+struct ExplicitCumulative {
+	using dimension = Dimensions<CumulativeCost, RouteTiming>;
 };
 
 // ---------------------------------------------------------------------------
@@ -279,7 +303,9 @@ void test_save_and_accept() {
 	assert(result.has_value() && "save_and_accept: eval should succeed");
 
 	solver.save_staging();
-	solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
+	run_checked(solver, [&] {
+		solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
+	});
 
 	assert(solver.cost() == *result && "save_and_accept: cost must match");
 	assert(solver.tour()[2] == 2 && "save_and_accept: tour[2] must be updated");
@@ -313,7 +339,9 @@ void test_reject_then_accept() {
 	// Do NOT save_staging -- we want to accept tour A's record.
 
 	// Accept the recorded tour A.
-	solver.accept_replay([&](std::size_t i) { return tour_a[i]; }, 2, *cost_a);
+	run_checked(solver, [&] {
+		solver.accept_replay([&](std::size_t i) { return tour_a[i]; }, 2, *cost_a);
+	});
 
 	assert(solver.cost() == *cost_a && "reject_then_accept: cost must match tour_a");
 	assert(solver.tour()[2] == 2 && "reject_then_accept: tour must reflect tour_a");
@@ -338,7 +366,9 @@ void test_direct_commit() {
 	assert(result.has_value() && "direct commit: eval should succeed");
 
 	// Accept without save_staging -- commit takes staging directly.
-	solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
+	run_checked(solver, [&] {
+		solver.accept_replay([&](std::size_t i) { return proposed[i]; }, 2, *result);
+	});
 
 	assert(solver.cost() == *result && "direct commit: cost must match");
 	assert(solver.tour()[2] == 2 && "direct commit: tour must be updated");
@@ -471,6 +501,226 @@ void test_close_tour_feasible() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 15: prefix_cost -- replaying from prefix_cost(k-1) gives the tour cost
+// ---------------------------------------------------------------------------
+
+template <typename SolverT>
+void check_prefix_cost_replay(const SolverT& solver) {
+	assert(solver.prefix_cost(0) == 0 && "prefix_cost(0): the first city contributes nothing");
+	const auto n = solver.tour().size();
+	for (std::size_t k = 1; k < n; ++k) {
+		auto result = solver.evaluate_replay(solver.tour(), k, solver.prefix_cost(k - 1));
+		assert(result.has_value() && "prefix_cost: self-replay must be feasible");
+		assert(*result == solver.cost()
+			&& "prefix_cost: replay from prefix_cost(k-1) must give the tour cost");
+	}
+}
+
+void test_prefix_cost_matches_replay_relaxed() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 5}, {0, 100}, {0, 100}
+	};
+	time_windows::Relaxed relaxed(windows, 10);
+	Solver solver(mat, relaxed);
+	solver.nearest_neighbor();
+	assert(solver.status() == SolutionStatus::feasible && "setup: Relaxed never rejects");
+	check_prefix_cost_replay(solver);
+}
+
+void test_prefix_cost_fractional_penalty() {
+	auto mat = make_mat4();
+	FractionalPenalty penalty;
+	Solver solver(mat, penalty);
+	solver.nearest_neighbor();
+	assert(solver.status() == SolutionStatus::feasible && "setup: FractionalPenalty never rejects");
+	check_prefix_cost_replay(solver);
+}
+
+void test_prefix_cost_pos0_ignores_delta() {
+	auto mat = make_mat4();
+	FlatPenalty flat;
+	Solver solver(mat, flat);
+	solver.nearest_neighbor();
+
+	assert(solver.prefix_cost(0) == 0
+		&& "prefix_cost(0): the first city contributes nothing, even with a penalty");
+	const auto t0 = solver.tour()[0];
+	const auto t1 = solver.tour()[1];
+	assert(solver.prefix_cost(1) == solver.distance(t0, t1) + 7
+		&& "prefix_cost(1): first edge plus its penalty");
+}
+
+// ---------------------------------------------------------------------------
+// Test 16: context_for -- CumulativeCost is implicit for every variant
+// ---------------------------------------------------------------------------
+
+void test_context_auto_cumulative_cost() {
+	using MatT = SymmetricDistanceMatrix<int>;
+	static_assert(!Solver<MatT>::context_type::has_dim<CumulativeCost>,
+		"NoCallbacks: no dimensions");
+	static_assert(Solver<MatT, PenalizeCity1>::context_type::has_dim<CumulativeCost>,
+		"variant without dimension: CumulativeCost is implicit");
+	static_assert(Solver<MatT, time_windows::Strict>::context_type::has_dim<CumulativeCost>
+		&& Solver<MatT, time_windows::Strict>::context_type::has_dim<RouteTiming>,
+		"Strict: declared RouteTiming plus implicit CumulativeCost");
+	static_assert(Solver<MatT, time_windows::Relaxed>::context_type::has_dim<CumulativeCost>
+		&& Solver<MatT, time_windows::Relaxed>::context_type::has_dim<RouteTiming>,
+		"Relaxed: declared RouteTiming plus implicit CumulativeCost");
+	static_assert(std::is_same_v<Solver<MatT, ExplicitCumulative>::context_type,
+	                             EvalContext<std::size_t, int, CumulativeCost, RouteTiming>>,
+		"explicit CumulativeCost: deduplicated, not doubled");
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: prefix_cost reads committed values while a staging is active
+// ---------------------------------------------------------------------------
+
+void test_committed_read_during_staging() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 5}, {0, 100}, {0, 100}
+	};
+	time_windows::Relaxed relaxed(windows, 10);
+	Solver solver(mat, relaxed);
+	solver.nearest_neighbor();
+	// NN with penalties: [0,2,3,1].
+
+	// Evaluate a different suffix from position 2 and leave the staging active.
+	std::vector<std::size_t> other = {0, 2, 1, 3};
+	auto pending = solver.evaluate_replay(other, 2, solver.prefix_cost(1));
+	assert(pending.has_value() && "committed read: Relaxed never rejects");
+	assert(*pending != solver.cost() && "setup: the other suffix must cost differently");
+
+	// prefix_cost(2) must return the committed value, not the staged one.
+	auto self = solver.evaluate_replay(solver.tour(), 3, solver.prefix_cost(2));
+	assert(self.has_value() && *self == solver.cost()
+		&& "committed read: prefix_cost must ignore the staged suffix");
+
+	solver.discard_staging();
+	auto again = solver.evaluate_replay(solver.tour(), 1, 0);
+	assert(again.has_value() && *again == solver.cost()
+		&& "committed read: state unchanged after discard_staging");
+}
+
+// ---------------------------------------------------------------------------
+// Test 20: evaluate_reversal matches the replay written by hand
+// ---------------------------------------------------------------------------
+
+void test_reversal_matches_manual_replay() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 5}, {0, 100}, {0, 100}
+	};
+	time_windows::Relaxed relaxed(windows, 10);
+	Solver solver(mat, relaxed);
+	solver.nearest_neighbor();
+
+	const auto tour = solver.tour();
+	for (std::size_t i = 0; i + 1 < tour.size(); ++i) {
+		for (std::size_t j = i + 1; j < tour.size(); ++j) {
+			const TwoOptMove<std::size_t> move{i, j};
+			const auto manual = solver.evaluate_replay(move.city_at(tour), i + 1,
+			                                           solver.prefix_cost(i));
+			solver.discard_staging();
+			const auto direct = solver.evaluate_reversal(i, j);
+			solver.discard_staging();
+			assert(manual.has_value() && direct.has_value()
+				&& "evaluate_reversal: Relaxed never rejects");
+			assert(*manual == *direct
+				&& "evaluate_reversal: cost must match the manual replay");
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 21: accept_reversal lands where a full set_tour would
+// ---------------------------------------------------------------------------
+
+template <typename Mat, typename Variant>
+void check_accept_reversal(const Mat& mat, const Variant& variant) {
+	Solver sized(mat, variant);
+	sized.nearest_neighbor();
+	const std::size_t n = sized.size();
+
+	for (std::size_t i = 0; i + 1 < n; ++i) {
+		for (std::size_t j = i + 1; j < n; ++j) {
+			Solver solver(mat, variant);
+			solver.nearest_neighbor();
+
+			std::vector<std::size_t> reversed(solver.tour().begin(), solver.tour().end());
+			std::reverse(reversed.begin() + static_cast<std::ptrdiff_t>(i + 1),
+			             reversed.begin() + static_cast<std::ptrdiff_t>(j) + 1);
+
+			const auto scored = solver.evaluate_reversal(i, j);
+			if (!scored) {  // filtered out: covered by test 22
+				solver.discard_staging();
+				continue;
+			}
+			run_checked(solver, [&] { solver.accept_reversal(i, j, *scored); });
+
+			Solver verifier(mat, variant);
+			verifier.set_tour(reversed);
+			assert(std::equal(reversed.begin(), reversed.end(),
+			                  solver.tour().begin(), solver.tour().end())
+				&& "accept_reversal: tour must be the reversed tour");
+			assert(solver.cost() == verifier.cost()
+				&& "accept_reversal: cost must match a full set_tour");
+			// The committed dimensions must describe the new tour, not the old.
+			const auto self = solver.evaluate_replay(solver.tour(), 1, 0);
+			solver.discard_staging();
+			assert(self.has_value() && *self == solver.cost()
+				&& "accept_reversal: self-replay must match");
+		}
+	}
+}
+
+void test_accept_reversal_relaxed() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 5}, {0, 100}, {0, 100}
+	};
+	check_accept_reversal(mat, time_windows::Relaxed(windows, 10));
+}
+
+void test_accept_reversal_strict() {
+	auto mat = make_mat4();
+	time_windows::TimeWindow windows[] = {
+		{0, 200}, {0, 200}, {0, 200}, {0, 200}
+	};
+	check_accept_reversal(mat, time_windows::Strict(windows));
+}
+
+// ---------------------------------------------------------------------------
+// Test 22: a rejected reversal leaves the tour untouched
+// ---------------------------------------------------------------------------
+
+void test_reversal_rejected_keeps_tour() {
+	auto mat = make_mat4();
+	// NN tour [0,1,3,2]; reversing positions 2..3 puts city 3 last, arrival 75.
+	time_windows::TimeWindow windows[] = {
+		{0, 100}, {0, 100}, {0, 100}, {0, 40}
+	};
+	time_windows::Strict tw(windows);
+	Solver solver(mat, tw);
+	solver.nearest_neighbor();
+	assert(solver.status() == SolutionStatus::feasible && "setup: NN tour must be feasible");
+
+	const std::vector<std::size_t> before(solver.tour().begin(), solver.tour().end());
+	const auto cost_before = solver.cost();
+
+	assert(!solver.evaluate_reversal(1, 3).has_value()
+		&& "rejected reversal: the window must filter it out");
+	solver.discard_staging();
+
+	assert(std::equal(before.begin(), before.end(),
+	                  solver.tour().begin(), solver.tour().end())
+		&& "rejected reversal: the tour must be intact");
+	assert(solver.cost() == cost_before && "rejected reversal: the cost must be intact");
+	assert_tour_invariants(solver);
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -506,6 +756,17 @@ int main() {
 		// close_tour
 		{"close_tour_infeasible",        test_close_tour_infeasible},
 		{"close_tour_feasible",          test_close_tour_feasible},
+		// prefix_cost / CumulativeCost
+		{"prefix_cost_matches_replay_relaxed", test_prefix_cost_matches_replay_relaxed},
+		{"prefix_cost_fractional_penalty",     test_prefix_cost_fractional_penalty},
+		{"prefix_cost_pos0_ignores_delta",     test_prefix_cost_pos0_ignores_delta},
+		{"context_auto_cumulative_cost",       test_context_auto_cumulative_cost},
+		{"committed_read_during_staging",      test_committed_read_during_staging},
+		// Segment reversal
+		{"reversal_matches_manual_replay",     test_reversal_matches_manual_replay},
+		{"accept_reversal_relaxed",            test_accept_reversal_relaxed},
+		{"accept_reversal_strict",             test_accept_reversal_strict},
+		{"reversal_rejected_keeps_tour",       test_reversal_rejected_keeps_tour},
 	};
 
 	for (const auto& t : tests) {

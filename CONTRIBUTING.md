@@ -39,10 +39,11 @@ Every algorithm uses the same pipeline to evaluate candidate moves:
 
 Key Solver methods:
 
-- **`evaluate(city)`** -- runs the pipeline, returns `std::optional<double>` (nullopt if filtered). Does not modify observable state (writes to `mutable ctx_`).
+- **`evaluate_append(city)`** -- runs the pipeline, returns `std::optional<double>` (nullopt if filtered). Does not modify observable state (writes to `mutable ctx_`).
 - **`append(city)`** -- runs init + prepare, applies the move (places city, updates cost), commits dimension state.
 - **`rebuild_and_cost(tour)`** -- replays a complete tour through the pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. Used by `set_tour`, `resume_at`, `clear`.
-- **`finalize_closing_edge()`** -- adds the return-to-start edge cost for complete tours.
+- **`close_tour()`** -- adds the return-to-start edge cost for complete tours.
+- **`evaluate_replay(city_at, from, prefix)`** / **`evaluate_reversal(i, j)`** -- score a rewrite of an existing tour by replaying the changed suffix through the pipeline. Used by local search, see [CALLBACKS.md](CALLBACKS.md).
 
 ### EvalContext
 
@@ -67,7 +68,7 @@ Algorithms are defined inline in `algorithms/*.hpp`. Each algorithm header inclu
 Constructive algorithms use `greedy_construct` with a strategy:
 
 ```cpp
-// NearestSelector calls solver.evaluate() in a loop, picks the minimum.
+// NearestSelector calls solver.evaluate_append() in a loop, picks the minimum.
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::nearest_neighbor(NearestNeighborParams params) -> Solver& {
     return greedy_construct(NearestSelector{}, ConstructParams{...});
@@ -79,56 +80,103 @@ auto Solver<Dist, Variant>::nearest_neighbor(NearestNeighborParams params) -> So
 Exact algorithms (Held-Karp) use the pipeline directly with `DPMove`.
 
 > [!IMPORTANT]
-> `position_` is the inverse index of `tour_`: `position_[city]` gives the position of a city in the current tour. If your algorithm modifies the tour and reads `position_`, call `rebuild_position()` each time the tour changes and `position_` is needed.
+> `position_` is the inverse index of `tour_` and `visited_` its membership set. Both are invariants: every primitive that writes `tour_` maintains them, so an algorithm never refreshes them. Write the tour through those primitives rather than touching `tour_` directly.
+
+## Where algorithm state lives
+
+| Kind | Examples | Lifecycle |
+|---|---|---|
+| Tour invariant | `position_`, `visited_` | always consistent with `tour_`; every tour mutation maintains it |
+| Matrix-derived | `neighbors_`, `hk_cache_` | lazy, persistent, invalidated by `set_matrix` |
+| Tour-derived, versioned | `path_fwd_`/`path_bwd_` | lazy via `ensure_path_costs()`, validated against `tour_version_`, maintained incrementally by `rebuild_path_costs(from)` during a run |
+| Dimensions | `RouteTiming`, `CumulativeCost` | declared by variants, maintained eagerly by the pipeline |
+| Algorithm workspace | `dont_look_`, `queue_` | refreshed on entry by the algorithm that uses them, maintained during its run, never read afterwards |
+
+Three rules follow:
+
+- Every write to `tour_` or `n_` increments `tour_version_`. Write through the existing primitives (`append`, `set_tour`, `accept_replay`, `accept_reversal`, `reverse_range`, `reverse_cyclic`), which do it for you; an algorithm that fills the tour itself, as `held_karp` does, increments it itself. A cache derived from the tour compares its own version against it, so a missing increment leaves that cache marked valid for a tour it no longer describes.
+- An algorithm never reads a workspace buffer it did not refresh in the same call.
+- Public accessors never expose the workspace category.
+
+Local search primitives available for reuse: `detail::ActiveQueue` (FIFO of active cities with don't-look bits), `reverse_range` / `reverse_cyclic`, `ensure_path_costs` / `rebuild_path_costs`, and the public `prefix_cost` / `evaluate_reversal` / `accept_reversal` / `path_cost`.
+
+### Output invariants
+
+Every method leaves the solver in a consistent state. The registry test loops check these around each algorithm call through `SolverTestAccess` (`tests/solver_test_access.hpp`, a friend under `PERIPLE_TESTING`), so a registered algorithm inherits the whole checklist without writing a test:
+
+| Invariant | Checked by |
+|---|---|
+| `position_` consistent with `tour_` | `position_consistent()` |
+| `visited_` consistent with `tour_` | `visited_consistent()` |
+| `cost_` equal to a pipeline recomputation | `cost == recompute`, or self-consistency through `set_tour` |
+| `status_` consistent with `n_` | feasible/optimal implies `n_ == size()` |
+| path costs up to date or marked stale | `path_costs_consistent()` |
+| no staging left active | `staging_inactive()` |
+| `tour_version_` changed whenever the tour changed | `run_checked(solver, call)` |
+
+An algorithm that can stop early must satisfy them at the point where it stops.
 
 ## Adding an algorithm
+
+The steps below use Or-opt as a running example. `algorithms/two_opt.hpp` is a worked example of the same path, for a local search that reuses the Solver's local search primitives.
 
 ### Step 1: Parameter struct
 
 In `core/solver.hpp`, add a parameter struct with sensible defaults:
 
 ```cpp
-struct TwoOptParams {
-    std::size_t max_iterations = 0;  // 0 = no limit
+struct OrOptParams {
+    std::size_t neighbors = 10;  // candidate list size per city (0 = all cities)
+    std::size_t max_moves = 0;   // stop after this many applied moves (0 = no limit)
 };
 ```
 
-### Step 2: Define Move types
+### Step 2: Define Move types (only if needed)
 
-Each algorithm family defines its own Move types. These are part of the public interface and determine which callback overloads users can provide. Define them in `core/moves.hpp`:
+Only if the existing move types do not describe what your algorithm evaluates. Move types are part of the public interface and determine which callback overloads users can provide; each lives in its own header under `core/moves/`:
 
 ```cpp
-struct TwoOptMove { std::size_t i, j; };
+// core/moves/or_opt_move.hpp
+template <typename CityT>
+struct OrOptMove {
+    CityT city;                    // first city of the moved segment
+    std::size_t from, len, to;     // source position, length, destination
+};
 ```
 
 A new move type requires adding overloads to existing variants. Existing variant updates will be handled during review -- open your PR with the algorithm and the maintainer will handle variant updates if needed.
+
+2-opt needed none: it scores a candidate tour by replaying the changed suffix as a sequence of `AppendMove`, so every existing variant works with it unchanged. Prefer that over a new move type unless an O(1) evaluation per dimension is the point of the algorithm.
 
 ### Step 3: Declare the Solver method
 
 In the `Solver` class in `core/solver.hpp`:
 
 ```cpp
-auto two_opt(TwoOptParams params = {}) -> Solver&;
+auto or_opt(OrOptParams params = {}) -> Solver&;
 ```
 
 ### Step 4: Implement the algorithm header
 
-Create `algorithms/two_opt.hpp`. Start with a reference block citing academic sources. Use the evaluation pipeline:
+Create `algorithms/or_opt.hpp`. Start with a reference block citing academic sources. Use the evaluation pipeline:
 
 ```cpp
 #pragma once
 
-// 2-opt local search
+// Or-opt local search
 //
-// Croes (1958), "A Method for Solving Traveling-Salesman Problems"
+// Or (1976), "Traveling Salesman-Type Combinatorial Problems and Their
+//   Relation to the Logistics of Regional Blood Banking"
 
 #include <periple/core/solver.hpp>
 
 namespace periple {
 
 template <DistanceSource Dist, typename Variant>
-auto Solver<Dist, Variant>::two_opt(TwoOptParams params) -> Solver& {
-    // Use evaluate(), append(), ctx_.init(), invoke_prepare(), invoke_filter()
+auto Solver<Dist, Variant>::or_opt(OrOptParams params) -> Solver& {
+    // Construction: evaluate_append(), append(), ctx_.init(), invoke_prepare().
+    // Improvement: evaluate_replay() / accept_replay() to score and apply a
+    //   rewrite of the current tour through the variant pipeline.
     // Set status_ to SolutionStatus::feasible for heuristics,
     //   SolutionStatus::optimal for exact solvers.
 }
@@ -141,7 +189,7 @@ auto Solver<Dist, Variant>::two_opt(TwoOptParams params) -> Solver& {
 In `periple/periple.hpp`:
 
 ```cpp
-#include <periple/algorithms/two_opt.hpp>
+#include <periple/algorithms/or_opt.hpp>
 ```
 
 ### Step 6: Register in the algorithm registry
@@ -149,20 +197,25 @@ In `periple/periple.hpp`:
 In `algorithms/registry.hpp`, add a descriptor struct and append it to the `AllAlgorithms` tuple:
 
 ```cpp
-struct AlgoTwoOpt {
-    static constexpr const char* tag  = "2O";
-    static constexpr const char* name = "two_opt";
+struct AlgoNNOrOpt {
+    static constexpr const char* tag  = "OO";
+    static constexpr const char* name = "nn_or_opt";
     static constexpr bool is_exact          = false;
     static constexpr bool symmetric_only    = false;
     static constexpr bool is_metaheuristic  = false;
     static constexpr int  max_tier          = 5;
 
     template <DistanceSource Dist, typename V>
-    void operator()(Solver<Dist, V>& s, unsigned = 0) const { s.two_opt(); }
+    void operator()(Solver<Dist, V>& s, unsigned = 0) const {
+        s.nearest_neighbor();
+        if (s.status() == SolutionStatus::feasible) s.or_opt();
+    }
 };
 
-using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoTwoOpt>;
+using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoNNTwoOpt, AlgoNNOrOpt>;
 ```
+
+The registry runs each entry on a fresh solver, so an improvement heuristic has to construct a tour first. Guard the improvement call: under a hard constraint the construction can stop early, leaving nothing to improve.
 
 This automatically enables the algorithm in `test_algorithms` (contract tests), `test_variants` (variant cross-product tests), and the [benchmark runner](BENCHMARKING.md).
 
@@ -281,10 +334,13 @@ tests/
     test_solver.cpp
     test_callbacks.cpp
     test_composed.cpp
+    test_replay.cpp
+    solver_test_access.hpp
     algorithms/
         CMakeLists.txt
         test_algorithms.cpp
         test_variants.cpp
+        test_two_opt.cpp
 ```
 
 ### Automated algorithm tests
@@ -325,7 +381,7 @@ The automated suite covers the common contract. If your algorithm has specific b
 | Cache struct | `AbbreviationCache` (PascalCase) | `HKCache`, `LKCache`, `GACache` |
 | Cache file | `abbreviation_cache.hpp` | `hk_cache.hpp`, `lk_cache.hpp` |
 | Algorithm header | `algorithm_name.hpp` | `greedy_construct.hpp`, `two_opt.hpp` |
-| Registry struct | `AlgoAlgorithmName` (PascalCase) | `AlgoNearestNeighbor`, `AlgoTwoOpt` |
+| Registry struct | `AlgoAlgorithmName` (PascalCase) | `AlgoNearestNeighbor`, `AlgoNNTwoOpt` |
 | Variant namespace | `snake_case` | `time_windows`, `service_times` |
 | Variant struct | `PascalCase` | `Strict`, `Relaxed`, `ServiceTimes` |
 | Dimension struct | `PascalCase` | `RouteTiming`, `RouteLoad` |

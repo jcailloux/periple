@@ -3,6 +3,9 @@
 #include <periple/core/dimensions.hpp>
 #include <periple/core/log.hpp>
 #include <periple/core/caches/hk_cache.hpp>
+#include <periple/core/moves/two_opt_move.hpp>
+#include <periple/core/active_queue.hpp>
+#include <periple/core/local_search_mode.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -13,12 +16,6 @@
 #include <vector>
 
 namespace periple {
-
-// ---------------------------------------------------------------------------
-// Tags
-// ---------------------------------------------------------------------------
-
-struct NoCallbacks {};
 
 // ---------------------------------------------------------------------------
 // Parameter structs
@@ -34,6 +31,11 @@ struct HeldKarpParams {};
 struct ConstructParams {
 	std::size_t start_city = 0;
 	std::size_t resume_at = 0;
+};
+
+struct TwoOptParams {
+	std::size_t neighbors = 10;  // candidate list size per city (0 = all cities)
+	std::size_t max_moves = 0;   // stop after this many applied moves (0 = no limit)
 };
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,12 @@ public:
 	[[nodiscard]] auto distance(city_type i, city_type j) const -> cost_type;
 	void set_tour(std::span<const city_type> tour);
 	void set_tour(std::span<const city_type> tour, cost_type known_cost);
+
+	// Rotates a complete tour so that city comes first, at equal cost, O(n).
+	// Only without a variant: rotating changes the traversal order, hence
+	// arrival times and penalties. Useful after two_opt() in symmetric mode,
+	// which treats the tour as a cycle and does not preserve its first city.
+	void rotate_to_front(city_type city);
 	void set_symmetric(bool sym);
 	void set_symmetric(bool sym, unchecked_t);
 
@@ -92,10 +100,12 @@ public:
 
 	// --- Evaluation ---------------------------------------------------------
 
-	// Tentative evaluation: init + prepare + filter -> score.
-	// Returns nullopt if the variant's move_filter rejects the city.
+	// Scores appending city at the end of the tour: init + prepare + filter.
+	// Returns the cost of the added edge, distance plus penalty, and not a tour
+	// cost: a partial tour has none, and an untruncated double keeps candidates
+	// comparable when penalties are fractional. Nullopt if move_filter rejects.
 	// Does not modify observable solver state (writes to mutable ctx_).
-	[[nodiscard]] auto evaluate(city_type city) const -> std::optional<double>;
+	[[nodiscard]] auto evaluate_append(city_type city) const -> std::optional<double>;
 
 	// Evaluates a proposed tour by replaying AppendMove from from_pos onward.
 	// Returns the total tour cost if feasible, or nullopt if any move_filter
@@ -108,9 +118,38 @@ public:
 	[[nodiscard]] auto evaluate_replay(std::span<const city_type> proposed, std::size_t from_pos, cost_type prefix_cost) const
 	    -> std::optional<cost_type>;
 
+	// Total cost of the tour obtained by reversing tour[i+1..j], replayed
+	// through the variant pipeline. O(n - i), left staged for accept_reversal.
+	// Requires a variant (uses prefix_cost).
+	[[nodiscard]] auto evaluate_reversal(std::size_t i, std::size_t j) const
+	    -> std::optional<cost_type>;
+
+	// Applies a scored reversal: commits the staged dimensions, then reverses
+	// in place, so nothing reads the tour while it is being written. O(j - i).
+	// Pairs with evaluate_reversal, or with a cost the caller derived from
+	// path_cost when there is no variant to stage.
+	void accept_reversal(std::size_t i, std::size_t j, cost_type new_cost);
+
+	// Committed cost of tour[0..pos] (edges + variant penalties), O(1).
+	// Requires a variant (CumulativeCost dimension).
+	[[nodiscard]] auto prefix_cost(std::size_t pos) const -> cost_type;
+
+	// Raw distance along the tour between two positions, following tour order
+	// when from <= to and going against it otherwise. O(1), after a lazy O(n)
+	// build. Penalties are excluded; prefix_cost is the variant-aware
+	// counterpart.
+	[[nodiscard]] auto path_cost(std::size_t from, std::size_t to) -> cost_type;
+
 	// Staging lifecycle for local search.
 	void save_staging() const;
 
+	// Drops any pending replay evaluation (staged dimension state).
+	void discard_staging() const;
+
+	// Applies a tour scored by evaluate_replay. city_at must not read the
+	// solver's own tour, which this overwrites as it goes; evaluate_replay
+	// only reads, so the same lambda is safe there. For a reversal, use
+	// evaluate_reversal and accept_reversal.
 	template <typename CityFn>
 	void accept_replay(CityFn&& city_at, std::size_t from_pos, cost_type new_cost);
 
@@ -129,6 +168,8 @@ public:
 	auto greedy_construct(Strategy strategy,
 	                      ConstructParams params = {}) -> Solver&;
 
+	auto two_opt(TwoOptParams params = {}) -> Solver&;
+
 #ifdef PERIPLE_TESTING
 	template <DistanceSource D, typename V> friend class SolverTestAccess;
 #endif
@@ -142,6 +183,18 @@ private:
 	void check_symmetry() const;
 	auto rebuild_and_cost(std::span<const city_type> t) -> cost_type;
 	void close_tour();
+
+	// Local search primitives (shared by improvement algorithms)
+	void ensure_path_costs();
+	void rebuild_path_costs(std::size_t from);
+	void reverse_range(std::size_t lo, std::size_t hi);
+	void reverse_cyclic(std::size_t from, std::size_t len);
+
+	template <detail::LocalSearchMode Mode>
+	void two_opt_run(const TwoOptParams& params);
+
+	template <detail::LocalSearchMode Mode>
+	auto two_opt_improve(city_type a, std::size_t k, detail::ActiveQueue<city_type>& active) -> bool;
 
 	auto variant_ref() const -> const Variant& {
 		if constexpr (std::is_same_v<Variant, NoCallbacks>) {
@@ -166,15 +219,21 @@ private:
 	bool           symmetric_  = false;
 	std::vector<city_type> tour_;
 	cost_type      cost_       = {};
+	std::size_t    tour_version_ = 0;  // Incremented by every write to tour_ or n_.
 
 	// Workspace (grow-only)
 	std::vector<city_type> position_;  // Inverse index: city -> position in tour.
-	std::vector<uint8_t>   visited_;
+	std::vector<uint8_t>   visited_;   // visited_[c] == (c is in tour); maintained like position_.
 	std::vector<uint8_t>   dont_look_;
+	std::vector<city_type> queue_;     // ActiveQueue slots.
 	std::vector<city_type> neighbors_;
 	std::size_t            neighbors_k_ = 0;
 
-	// Evaluation context (mutable: evaluate() is const)
+	// Tour-derived, valid iff path_costs_version_ == tour_version_.
+	std::vector<cost_type> path_fwd_, path_bwd_;
+	std::size_t            path_costs_version_ = 0;
+
+	// Evaluation context (mutable: the evaluate_* methods are const)
 	mutable context_type ctx_;
 
 	// Algorithm caches (lazy, one per algorithm that needs persistent state)
@@ -203,6 +262,7 @@ void Solver<Dist, Variant>::set_matrix(const Dist& dist) {
 	status_ = SolutionStatus::none;
 	n_      = 0;
 	cost_   = {};
+	++tour_version_;
 	ctx_.reset();
 	invalidate_caches();
 	if (symmetric_) check_symmetry();
@@ -218,6 +278,7 @@ void Solver<Dist, Variant>::clear() {
 	status_ = SolutionStatus::none;
 	n_      = 0;
 	cost_   = {};
+	++tour_version_;
 	ctx_.reset();
 }
 
@@ -298,11 +359,15 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 	ensure_capacity(total);
 	n_ = t.size();
 	std::copy(t.begin(), t.end(), tour_.begin());
+	++tour_version_;
 
 	if (n_ > 0) {
-		cost_   = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
-		status_ = (n_ == total) ? SolutionStatus::feasible : SolutionStatus::partial;
-		if (n_ < total) {
+		cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
+		if (n_ == total) {
+			status_ = SolutionStatus::feasible;
+			std::fill_n(visited_.data(), total, uint8_t{1});
+		} else {
+			status_ = SolutionStatus::partial;
 			std::fill_n(visited_.data(), total, uint8_t{0});
 			for (std::size_t i = 0; i < n_; ++i)
 				visited_[static_cast<std::size_t>(t[i])] = 1;
@@ -330,6 +395,81 @@ void Solver<Dist, Variant>::rebuild_position() {
 	for (std::size_t i = 0; i < n_; ++i)
 		position_[static_cast<std::size_t>(tour_[i])] =
 			static_cast<city_type>(i);
+}
+
+// Reverses tour_[lo..hi] in place and refreshes position_ for that range.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::reverse_range(std::size_t lo, std::size_t hi) {
+	std::reverse(tour_.begin() + static_cast<std::ptrdiff_t>(lo),
+	             tour_.begin() + static_cast<std::ptrdiff_t>(hi) + 1);
+	for (std::size_t p = lo; p <= hi; ++p)
+		position_[static_cast<std::size_t>(tour_[p])] = static_cast<city_type>(p);
+	++tour_version_;
+}
+
+// Reverses the cyclic segment of len positions starting at from, wrapping past
+// the end of the tour.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::reverse_cyclic(std::size_t from, std::size_t len) {
+	std::size_t lo = from;
+	std::size_t hi = from + len - 1;
+	if (hi >= n_) hi -= n_;
+	for (std::size_t s = 0; s < len / 2; ++s) {
+		std::swap(tour_[lo], tour_[hi]);
+		position_[static_cast<std::size_t>(tour_[lo])] = static_cast<city_type>(lo);
+		position_[static_cast<std::size_t>(tour_[hi])] = static_cast<city_type>(hi);
+		lo = (lo + 1 == n_) ? 0 : lo + 1;
+		hi = (hi == 0) ? n_ - 1 : hi - 1;
+	}
+	++tour_version_;
+}
+
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::rotate_to_front(city_type city) {
+	static_assert(!has_callbacks,
+		"rotate_to_front: only without a variant (rotating changes the traversal order)");
+	assert((status_ == SolutionStatus::feasible || status_ == SolutionStatus::optimal)
+		&& "rotate_to_front: requires a complete tour");
+	assert(static_cast<std::size_t>(city) < dist_->size()
+		&& "rotate_to_front: city index out of bounds");
+
+	const auto p = static_cast<std::size_t>(position_[static_cast<std::size_t>(city)]);
+	if (p == 0) return;
+	std::rotate(tour_.begin(), tour_.begin() + static_cast<std::ptrdiff_t>(p),
+	            tour_.begin() + static_cast<std::ptrdiff_t>(n_));
+	rebuild_position();
+	++tour_version_;
+}
+
+// Prefix costs of the tour path in both directions:
+//   path_fwd_[q] = sum of d(t[p], t[p+1]) for p < q
+//   path_bwd_[q] = sum of d(t[p+1], t[p]) for p < q
+// They give the cost of any sub-path in O(1), in either direction, which is
+// what an asymmetric segment reversal needs. The closing edge is never inside
+// a reversed segment and is not included.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::ensure_path_costs() {
+	assert(n_ > 0 && "ensure_path_costs: empty tour");
+	if (path_costs_version_ == tour_version_) return;
+	if (path_fwd_.size() < n_) {
+		path_fwd_.resize(n_);
+		path_bwd_.resize(n_);
+	}
+	path_fwd_[0] = cost_type{};
+	path_bwd_[0] = cost_type{};
+	rebuild_path_costs(0);
+}
+
+// Recomputes entries after `from`, which must still be valid, and marks the
+// path costs as current.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::rebuild_path_costs(std::size_t from) {
+	const auto& dist = *dist_;
+	for (std::size_t q = from; q + 1 < n_; ++q) {
+		path_fwd_[q + 1] = path_fwd_[q] + dist(tour_[q], tour_[q + 1]);
+		path_bwd_[q + 1] = path_bwd_[q] + dist(tour_[q + 1], tour_[q]);
+	}
+	path_costs_version_ = tour_version_;
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -459,9 +599,9 @@ void Solver<Dist, Variant>::close_tour() {
 // --- Evaluation -------------------------------------------------------------
 
 template <DistanceSource Dist, typename Variant>
-auto Solver<Dist, Variant>::evaluate(city_type city) const -> std::optional<double> {
-	assert(dist_ && "evaluate: no distance source set");
-	assert(n_ > 0 && "evaluate: tour must have at least one city");
+auto Solver<Dist, Variant>::evaluate_append(city_type city) const -> std::optional<double> {
+	assert(dist_ && "evaluate_append: no distance source set");
+	assert(n_ > 0 && "evaluate_append: tour must have at least one city");
 
 	AppendMove<city_type> move{city, tour_[n_ - 1], n_};
 	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
@@ -496,6 +636,7 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 	visited_[static_cast<std::size_t>(city)] = 1;
 	position_[static_cast<std::size_t>(city)] = static_cast<city_type>(n_);
 	++n_;
+	++tour_version_;
 
 	ctx_.commit(move);
 
@@ -510,7 +651,7 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::can_append(city_type city) const -> bool {
-	return evaluate(city).has_value();
+	return evaluate_append(city).has_value();
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -582,11 +723,61 @@ auto Solver<Dist, Variant>::evaluate_replay(
 	return evaluate_replay([&](std::size_t i) { return proposed[i]; }, from_pos, prefix_cost);
 }
 
+// --- Segment reversal -------------------------------------------------------
+
+// The reversal reads positions i+1..j backwards; position 0 stays put, so the
+// prefix up to i is untouched and prefix_cost(i) is the exact starting cost.
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::evaluate_reversal(std::size_t i, std::size_t j) const
+    -> std::optional<cost_type>
+{
+	assert(i < j && j < n_ && "evaluate_reversal: positions out of range");
+	const TwoOptMove<city_type> move{i, j};
+	return evaluate_replay(move.city_at(tour_), i + 1, prefix_cost(i));
+}
+
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::accept_reversal(std::size_t i, std::size_t j, cost_type new_cost) {
+	assert(i < j && j < n_ && "accept_reversal: positions out of range");
+	ctx_.commit_staging(n_);
+	reverse_range(i + 1, j);
+	cost_ = new_cost;
+}
+
+// --- Prefix cost ------------------------------------------------------------
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::prefix_cost(std::size_t pos) const -> cost_type {
+	static_assert(context_type::template has_dim<CumulativeCost>,
+		"prefix_cost: requires a variant (CumulativeCost dimension)");
+	assert(pos < n_ && "prefix_cost: position out of range");
+	return static_cast<cost_type>(
+		ctx_.template dim<CumulativeCost>().costs.committed(pos));
+}
+
+// Walking up from `from` to `to` crosses the edges p in [from, to-1], which is
+// the difference of the forward prefixes; walking down crosses p in [to,
+// from-1] in the other direction, hence the backward ones.
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::path_cost(std::size_t from, std::size_t to) -> cost_type {
+	static_assert(!has_callbacks,
+		"path_cost: raw distances only (use prefix_cost with a variant)");
+	assert(from < n_ && to < n_ && "path_cost: position out of range");
+	ensure_path_costs();
+	return (from <= to) ? path_fwd_[to] - path_fwd_[from]
+	                    : path_bwd_[from] - path_bwd_[to];
+}
+
 // --- Staging lifecycle ------------------------------------------------------
 
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::save_staging() const {
 	ctx_.save_staging(n_);
+}
+
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::discard_staging() const {
+	ctx_.discard_staging();
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -601,6 +792,7 @@ void Solver<Dist, Variant>::accept_replay(
 	for (std::size_t i = from_pos; i < n_; ++i)
 		position_[static_cast<std::size_t>(tour_[i])] = static_cast<city_type>(i);
 	cost_ = new_cost;
+	++tour_version_;
 }
 
 // --- Tour import with known cost --------------------------------------------
@@ -625,6 +817,7 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t,
 	ensure_capacity(total);
 	n_ = t.size();
 	std::copy(t.begin(), t.end(), tour_.begin());
+	++tour_version_;
 
 	// Rebuild dimensions (the cost is overridden below).
 	if (n_ > 0)
@@ -634,6 +827,7 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t,
 
 	if (n_ == total) {
 		status_ = SolutionStatus::feasible;
+		std::fill_n(visited_.data(), total, uint8_t{1});
 	} else if (n_ > 0) {
 		status_ = SolutionStatus::partial;
 		std::fill_n(visited_.data(), total, uint8_t{0});

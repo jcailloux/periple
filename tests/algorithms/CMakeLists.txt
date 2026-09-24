@@ -6,4 +6,12 @@ add_test(NAME algorithms COMMAND test_algorithms)
 
 add_executable(test_variants test_variants.cpp)
 target_link_libraries(test_variants PRIVATE periple::periple)
+target_compile_definitions(test_variants PRIVATE PERIPLE_TESTING)
+target_include_directories(test_variants PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 add_test(NAME variants COMMAND test_variants)
+
+add_executable(test_two_opt test_two_opt.cpp)
+target_link_libraries(test_two_opt PRIVATE periple::periple)
+target_compile_definitions(test_two_opt PRIVATE PERIPLE_TESTING)
+target_include_directories(test_two_opt PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+add_test(NAME two_opt COMMAND test_two_opt)

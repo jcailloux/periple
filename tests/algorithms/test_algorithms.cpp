@@ -88,7 +88,7 @@ template <typename Algo, periple::DistanceSource Dist>
 void test_one(const Algo& algo, const Dist& dist) {
 	const auto n = dist.size();
 	periple::Solver solver(dist);
-	algo(solver);
+	periple::run_checked(solver, [&] { algo(solver); });
 
 	if (n == 0) {
 		assert(solver.tour().empty());
@@ -98,10 +98,6 @@ void test_one(const Algo& algo, const Dist& dist) {
 
 	assert_valid_tour(solver.tour(), n);
 	assert(solver.cost() == recompute_cost(dist, solver.tour()));
-
-	// Verify position_ consistency
-	periple::SolverTestAccess access(solver);
-	assert(access.position_consistent());
 
 	if constexpr (Algo::is_exact) {
 		assert(solver.status() == periple::SolutionStatus::optimal);
@@ -120,7 +116,7 @@ void test_one_jv(const Algo& algo, const periple::DistanceMatrix<int>& dist) {
 
 	auto jv = periple::jonker_volgenant(dist);
 	periple::Solver solver(jv);
-	algo(solver);
+	periple::run_checked(solver, [&] { algo(solver); });
 
 	auto tour = jv.atsp_tour(solver.tour());
 	auto cost = jv.atsp_cost(solver.cost());
@@ -154,17 +150,15 @@ void test_cache_invalidation(const Algo& algo) {
 	});
 
 	periple::Solver solver(m1);
-	algo(solver);
+	periple::run_checked(solver, [&] { algo(solver); });
 	assert(solver.cost() == recompute_cost(m1, solver.tour()));
 
 	// Switch to a different-sized matrix and solve again
 	solver.set_matrix(m2);
-	algo(solver);
+	periple::run_checked(solver, [&] { algo(solver); });
 
 	assert_valid_tour(solver.tour(), m2.size());
 	assert(solver.cost() == recompute_cost(m2, solver.tour()));
-	periple::SolverTestAccess access(solver);
-	assert(access.position_consistent());
 
 	if constexpr (Algo::is_exact)
 		assert(solver.cost() == brute_force_optimal(m2));

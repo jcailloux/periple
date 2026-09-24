@@ -12,7 +12,7 @@
 namespace periple {
 
 // Strategy for greedy_construct: selects the nearest unvisited city.
-// Uses solver.evaluate() for filtering and scoring (variant-aware).
+// Uses solver.evaluate_append() for filtering and scoring (variant-aware).
 struct NearestSelector {
 
 	template <DistanceSource Dist, typename Variant>
@@ -31,7 +31,7 @@ struct NearestSelector {
 			auto candidate = static_cast<city_type>(j);
 			if (solver.is_visited(candidate)) continue;
 
-			auto result = solver.evaluate(candidate);
+			auto result = solver.evaluate_append(candidate);
 			if (!result) continue;
 
 			if (!found || *result < best_score) {
