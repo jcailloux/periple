@@ -58,8 +58,10 @@ The Solver owns a `context_type` deduced from the variant's `dimension` typedef:
 `EvalContext` provides:
 - `cost_delta` (double, mutable) -- additive cost adjustment
 - `dim<D>()` -- access dimension D
-- `tour()`, `position()`, `cost()` -- read-only solver state
+- `tour()`, `position()` -- the placed prefix and its inverse index, during construction (asserted)
+- `cost()` -- the cost so far
 - `init()`, `commit()`, `snapshot()`, `restore()` -- lifecycle methods
+- `begin_staging()`, `discard_staging()`, `save_staging()`, `commit_staging()` -- replay staging, forwarded to the dimensions that provide it
 
 ### Algorithm structure
 

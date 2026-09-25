@@ -13,6 +13,7 @@
 #include <periple/core/staged_vector.hpp>
 #include <periple/core/traits.hpp>
 #include <periple/core/moves/append_move.hpp>
+#include <periple/core/moves/dp_move.hpp>
 
 #include <cstddef>
 
@@ -60,6 +61,10 @@ struct CumulativeCost {
 		costs[pos_] = (pos_ == 0) ? 0.0
 			: prefix + static_cast<double>(static_cast<cost_type>(edge + ctx.cost_delta));
 	}
+
+	// Inert during a DP: prefix costs are rebuilt from the final tour.
+	template <DistanceSource Dist, typename CityT>
+	void init(const DPMove<CityT>&, const Dist&) {}
 
 	struct AppendSnapshot { double prefix, edge; std::size_t pos; };
 
