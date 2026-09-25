@@ -151,6 +151,30 @@ void test_protocol_two_opt_replay() {
 }
 
 // ---------------------------------------------------------------------------
+// Protocol: exact DP moves through the pipeline
+// ---------------------------------------------------------------------------
+
+void test_protocol_held_karp_logging() {
+	auto mat = make_mat4();
+	LoggingCallbacks cb;
+	Solver solver(mat, cb);
+	solver.held_karp();
+	assert(solver.status() == SolutionStatus::optimal && "LoggingCallbacks rejects nothing, so held_karp must succeed");
+
+	// Forward: 3 moves from {0}, 2 from each of the 3 one-city states, 1 from
+	// each of the 6 two-city states; then 3 closing moves.
+	const std::size_t dp_moves = 3 + 3 * 2 + 6 * 1 + 3;
+	assert(cb.log.size() == 2 * dp_moves + 5
+		&& "expected 18 DP prepare/filter pairs, then the tour rebuilt as 4 appends and the closing edge");
+	for (std::size_t k = 0; k < 2 * dp_moves; k += 2) {
+		assert(cb.log[k] == "dp_move_prepare" && "expected dp_move_prepare to open each pair");
+		assert(cb.log[k + 1] == "dp_move_filter" && "expected dp_move_filter to close each pair");
+	}
+	for (std::size_t k = 2 * dp_moves; k < cb.log.size(); ++k)
+		assert(cb.log[k] == "move_prepare" && "rebuild_and_cost replays the tour through move_prepare alone");
+}
+
+// ---------------------------------------------------------------------------
 // Unit: move_filter rejects a specific city
 // ---------------------------------------------------------------------------
 
@@ -671,6 +695,7 @@ int main() {
 		{"protocol_nn_n1",              test_protocol_nn_n1},
 		{"protocol_reversal_replay",     test_protocol_reversal_replay},
 		{"protocol_two_opt_replay",      test_protocol_two_opt_replay},
+		{"protocol_held_karp_logging",   test_protocol_held_karp_logging},
 		// Unit - move_filter
 		{"move_filter_reject",           test_move_filter_reject},
 		// Unit - move_prepare
