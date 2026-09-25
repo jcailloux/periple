@@ -16,6 +16,11 @@ namespace periple {
 
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
+	static_assert(detail::covers_move<Variant, DPMove<city_type>, context_type, city_type>::value,
+		"held_karp: the variant, or one of its components, has no DPMove callback, so held_karp would ignore it");
+	static_assert(context_type::template dims_handle<DPMove<city_type>, Dist>,
+		"held_karp: a dimension has no DPMove init or commit, so its state would not follow the DP");
+
 	if (try_trivial()) {
 		status_ = SolutionStatus::optimal;
 		return *this;
@@ -47,8 +52,6 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
 	dp[idx(1, 0)] = cost_type{};
 
 	const auto& variant = variant_ref();
-	const std::span<const city_type> tour_span{tour_.data(), n_};
-	const std::span<const city_type> pos_span{position_.data(), n_};
 
 	// Forward DP
 	const std::size_t complement_mask = num_sets - 1;
@@ -65,7 +68,7 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
 				auto raw_dist = (*dist_)(ci, cj);
 
 				DPMove<city_type> move{ci, cj, S};
-				ctx_.init(move, *dist_, tour_span, pos_span, dp[idx(S, i)]);
+				ctx_.init(move, *dist_, dp[idx(S, i)]);
 				invoke_prepare(variant, move, ctx_);
 
 				if (!invoke_filter(variant, move, ctx_)) continue;
@@ -95,7 +98,7 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
 		auto raw_dist = (*dist_)(ci, city_type{0});
 
 		DPMove<city_type> move{ci, city_type{0}, full};
-		ctx_.init(move, *dist_, tour_span, pos_span, dp[idx(full, i)]);
+		ctx_.init(move, *dist_, dp[idx(full, i)]);
 		invoke_prepare(variant, move, ctx_);
 
 		if (!invoke_filter(variant, move, ctx_)) continue;

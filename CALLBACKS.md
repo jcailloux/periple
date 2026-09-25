@@ -88,14 +88,18 @@ struct MyVariant {
 };
 ```
 
+Every variant with callbacks handles `AppendMove`, which costs every tour. It handles `DPMove` when its constraint fits an exact DP, as `held_karp` requires; a variant that leaves `DPMove` out says why in its header. The rule applies to each component of a `Composed` and to each dimension (an `init` or `commit` per move type). An empty overload marks a move that needs no work, as in `CumulativeCost` for `DPMove`.
+
 ## EvalContext
 
 The evaluation context carries read-only solver state and mutable dimensions. It is created automatically by the Solver based on the variant's `dimension` typedef.
 
 **Read-only** (set by `init`, not modifiable by callbacks):
-- `ctx.tour()` -- current partial tour
-- `ctx.position()` -- inverse index (city -> position)
+- `ctx.tour()` -- the partial tour placed so far, during construction only
+- `ctx.position()` -- its inverse index (city -> position), during construction only
 - `ctx.cost()` -- current accumulated cost
+
+During a replay or a DP, the state lives in the move (`DPMove::set` holds the visited cities) and in the dimensions; both accessors assert that a construction is running.
 
 **Mutable**:
 - `ctx.cost_delta` -- additive adjustment to the move's score (`double`, always)
@@ -208,7 +212,7 @@ When resuming, `rebuild_and_cost` replays the prefix through the full pipeline (
 
 Local search does not append cities, it rewrites part of an existing tour. Instead of a second callback interface, Periple replays the changed suffix through the constructive pipeline: every position from the first changed one is evaluated as an `AppendMove`, so a variant written for `nearest_neighbor` works with `two_opt` unchanged.
 
-During a replay `ctx.tour()` and `ctx.position()` are empty spans, since the candidate tour exists nowhere yet, and `ctx.cost()` is the running cost of the candidate prefix.
+The candidate tour exists nowhere yet during a replay: the variant reads its state from the move and the dimensions (`ctx.tour()` and `ctx.position()` serve construction), and `ctx.cost()` is the running cost of the candidate prefix. A dimension that commits state on `AppendMove` stages it, so that scoring a candidate leaves the committed tour's state intact; `evaluate_replay` checks this at compile time.
 
 Any variant gets a `CumulativeCost` dimension automatically. It holds the committed cost of every prefix, which is what makes a partial replay possible: scoring a change at position `i` starts from `prefix_cost(i)` rather than replaying the whole tour.
 

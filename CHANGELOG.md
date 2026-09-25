@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Breaking
+
+- A variant with callbacks must handle `AppendMove`, and `held_karp` requires every variant component and dimension to handle `DPMove`. A variant that would be ignored now fails to compile instead.
+- `ctx.tour()` and `ctx.position()` fail an assert during a replay and during `held_karp`, where they used to return an empty span and an unrelated tour.
+- A dimension that commits state on `AppendMove` must provide staging (`begin_staging`, `discard_staging`, `save_staging`, `commit_staging`) to be used with `two_opt` or any replay, so that a rejected candidate leaves the committed tour's state intact.
+
+### Fixed
+
+- The custom dimension example in VARIANTS.md read its position from `ctx.tour()`, which is empty during a replay, did not stage its state, and called an undefined `demand()`.
+
 ### Known issues
 
 - `held_karp` under time windows with waiting (`earliest > 0`) keeps only the cheapest state per (visited set, city) and can report `infeasible` for a feasible instance. Pinned by `tests/algorithms/test_held_karp_waiting_windows.cpp`.
