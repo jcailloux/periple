@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <numeric>
@@ -250,6 +251,192 @@ void run_infeasible_held_karp() {
 }
 
 // ---------------------------------------------------------------------------
+// Oracle variants x all algorithms: constrained optimum known by brute force
+// ---------------------------------------------------------------------------
+
+// Adds a cost per directed edge.
+struct EdgeSurcharge {
+	const DistanceMatrix<int>* extra;
+
+	template <typename CityT, typename Ctx>
+	void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const {
+		if (m.pos > 0) ctx.cost_delta += (*extra)(m.prev_city, m.city);
+	}
+
+	template <typename CityT, typename Ctx>
+	void move_prepare(const DPMove<CityT>& m, Ctx& ctx) const {
+		ctx.cost_delta += (*extra)(m.from, m.to);
+	}
+};
+
+// Rejects some directed edges.
+struct ForbiddenEdges {
+	const std::vector<std::uint8_t>* banned;  // banned[a * n + b]
+	std::size_t n;
+
+	bool allows(std::size_t a, std::size_t b) const { return !(*banned)[a * n + b]; }
+
+	template <typename CityT>
+	bool move_filter(const AppendMove<CityT>& m) const {
+		return m.pos == 0 || allows(static_cast<std::size_t>(m.prev_city), static_cast<std::size_t>(m.city));
+	}
+
+	template <typename CityT>
+	bool move_filter(const DPMove<CityT>& m) const {
+		return allows(static_cast<std::size_t>(m.from), static_cast<std::size_t>(m.to));
+	}
+};
+
+// Cheapest tour from city 0 under edge_cost, among those whose every edge is
+// allowed; nullopt if there is none.
+template <typename EdgeCost, typename Allows>
+std::optional<int> brute_force_constrained(std::size_t n, EdgeCost edge_cost, Allows allows) {
+	std::vector<std::size_t> tour(n);
+	std::iota(tour.begin(), tour.end(), std::size_t{0});
+	std::optional<int> best;
+	do {
+		int cost = 0;
+		bool admitted = true;
+		for (std::size_t i = 0; i < n && admitted; ++i) {
+			const auto a = tour[i], b = tour[(i + 1) % n];
+			admitted = allows(a, b);
+			cost += edge_cost(a, b);
+		}
+		if (admitted && (!best || cost < *best)) best = cost;
+	} while (std::next_permutation(tour.begin() + 1, tour.end()));
+	return best;
+}
+
+template <typename Algo>
+void test_oracles(const Algo& algo, const DistanceMatrix<int>& dist,
+                  const DistanceMatrix<int>& extra, const std::vector<std::uint8_t>& banned) {
+	const auto n = dist.size();
+	auto surcharged = [&](std::size_t a, std::size_t b) { return dist(a, b) + extra(a, b); };
+	auto plain = [&](std::size_t a, std::size_t b) { return dist(a, b); };
+
+	EdgeSurcharge surcharge{&extra};
+	Solver s1(dist, surcharge);
+	run_checked(s1, [&] { algo(s1); });
+	assert_valid_tour(dist, s1.tour());
+	int tour_cost = 0;
+	for (std::size_t i = 0; i < n; ++i)
+		tour_cost += surcharged(s1.tour()[i], s1.tour()[(i + 1) % n]);
+	assert(s1.cost() == tour_cost && "the reported cost must include every edge's move_prepare surcharge");
+	if constexpr (Algo::is_exact)
+		assert(s1.cost() == *brute_force_constrained(n, surcharged, [](std::size_t, std::size_t) { return true; })
+			&& "an exact algorithm must minimize the cost move_prepare defines");
+
+	ForbiddenEdges forbidden{&banned, n};
+	Solver s2(dist, forbidden);
+	run_checked(s2, [&] { algo(s2); });
+	if (s2.status() == SolutionStatus::feasible || s2.status() == SolutionStatus::optimal) {
+		for (std::size_t i = 0; i < n; ++i)
+			assert(forbidden.allows(s2.tour()[i], s2.tour()[(i + 1) % n])
+				&& "a complete tour must not use an edge move_filter rejects");
+	}
+	if constexpr (Algo::is_exact) {
+		const auto best = brute_force_constrained(n, plain,
+			[&](std::size_t a, std::size_t b) { return forbidden.allows(a, b); });
+		assert((best ? s2.status() == SolutionStatus::optimal && s2.cost() == *best
+		             : s2.status() == SolutionStatus::infeasible)
+			&& "an exact algorithm must reach the optimum over the tours move_filter admits, or report infeasible");
+	}
+}
+
+// Random asymmetric instances, n = 3..6, each directed edge banned with probability 1/3.
+void run_oracles() {
+	std::uint64_t x = 0x9E3779B97F4A7C15ull;
+	auto next = [&x] { x ^= x << 13; x ^= x >> 7; x ^= x << 17; return x; };
+	auto random_matrix = [&](std::size_t n, int hi) {
+		std::vector<int> w(n * n, 0);
+		for (std::size_t i = 0; i < n; ++i)
+			for (std::size_t j = 0; j < n; ++j)
+				if (i != j) w[i * n + j] = static_cast<int>(next() % static_cast<std::uint64_t>(hi)) + 1;
+		return DistanceMatrix<int>(n, w);
+	};
+
+	for (std::size_t n = 3; n <= 6; ++n) {
+		for (int seed = 0; seed < 5; ++seed) {
+			auto dist = random_matrix(n, 50);
+			auto extra = random_matrix(n, 100);
+			std::vector<std::uint8_t> banned(n * n, 0);
+			for (std::size_t i = 0; i < n; ++i)
+				for (std::size_t j = 0; j < n; ++j)
+					if (i != j && next() % 3 == 0) banned[i * n + j] = 1;
+
+			for_each_algorithm(nullptr, [&](const auto& algo) {
+				test_oracles(algo, dist, extra, banned);
+			});
+		}
+	}
+}
+
+// Deadlines only (earliest = 0): no waiting, so arrival equals the distance
+// travelled and the cheapest state is also the earliest one. Exercises a
+// dimension (RouteTiming) whose state must propagate from move to move.
+template <typename Algo>
+void test_deadline_oracle(const Algo& algo, const DistanceMatrix<int>& dist,
+                          std::span<const time_windows::TimeWindow> windows) {
+	const auto n = dist.size();
+	std::vector<std::size_t> tour(n);
+	std::iota(tour.begin(), tour.end(), std::size_t{0});
+	std::optional<int> best;
+	do {
+		int arrival = 0;
+		bool on_time = true;
+		for (std::size_t i = 1; i <= n && on_time; ++i) {
+			arrival += dist(tour[i - 1], tour[i % n]);
+			on_time = arrival <= windows[tour[i % n]].latest;
+		}
+		if (on_time && (!best || arrival < *best)) best = arrival;
+	} while (std::next_permutation(tour.begin() + 1, tour.end()));
+
+	time_windows::Strict tw(windows);
+	Solver solver(dist, tw);
+	run_checked(solver, [&] { algo(solver); });
+	if (solver.status() == SolutionStatus::feasible || solver.status() == SolutionStatus::optimal)
+		assert(tour_respects_windows(dist, solver.tour(), windows)
+			&& "a complete tour must meet every deadline the dimension tracks");
+	if constexpr (Algo::is_exact)
+		assert((best ? solver.status() == SolutionStatus::optimal && solver.cost() == *best
+		             : solver.status() == SolutionStatus::infeasible)
+			&& "an exact algorithm must reach the optimum over the tours that meet their deadlines, or report infeasible");
+}
+
+// Deadlines set just after the arrival times of a random tour: that tour stays
+// feasible, and the unconstrained optimum usually is not.
+void run_deadline_oracles() {
+	std::uint64_t x = 0xD1B54A32D192ED03ull;
+	auto next = [&x] { x ^= x << 13; x ^= x >> 7; x ^= x << 17; return x; };
+	for (std::size_t n = 3; n <= 6; ++n) {
+		for (int seed = 0; seed < 5; ++seed) {
+			std::vector<int> w(n * n, 0);
+			for (std::size_t i = 0; i < n; ++i)
+				for (std::size_t j = 0; j < n; ++j)
+					if (i != j) w[i * n + j] = static_cast<int>(next() % 50) + 1;
+			DistanceMatrix<int> dist(n, w);
+
+			std::vector<std::size_t> witness(n);
+			std::iota(witness.begin(), witness.end(), std::size_t{0});
+			for (std::size_t i = n - 1; i > 1; --i)
+				std::swap(witness[i], witness[1 + next() % i]);
+
+			std::vector<time_windows::TimeWindow> windows(n);
+			windows[0] = {0.0, 1e9};  // the depot never closes
+			int arrival = 0;
+			for (std::size_t i = 1; i < n; ++i) {
+				arrival += dist(witness[i - 1], witness[i]);
+				windows[witness[i]] = {0.0, static_cast<double>(arrival + static_cast<int>(next() % 10))};
+			}
+
+			for_each_algorithm(nullptr, [&](const auto& algo) {
+				test_deadline_oracle(algo, dist, windows);
+			});
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -302,5 +489,15 @@ int main() {
 	std::printf("tsptw_infeasible_held_karp ... ");
 	std::fflush(stdout);
 	run_infeasible_held_karp();
+	std::printf("OK\n");
+
+	std::printf("variant_oracles ... ");
+	std::fflush(stdout);
+	run_oracles();
+	std::printf("OK\n");
+
+	std::printf("deadline_oracles ... ");
+	std::fflush(stdout);
+	run_deadline_oracles();
 	std::printf("OK\n");
 }

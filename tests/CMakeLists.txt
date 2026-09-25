@@ -1,3 +1,8 @@
+# Tests are assert-based: keep assert active in every build type.
+foreach(config RELEASE RELWITHDEBINFO MINSIZEREL)
+    string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_${config} "${CMAKE_CXX_FLAGS_${config}}")
+endforeach()
+
 add_executable(test_distance_matrix test_distance_matrix.cpp)
 target_link_libraries(test_distance_matrix PRIVATE periple::periple)
 add_test(NAME distance_matrix COMMAND test_distance_matrix)

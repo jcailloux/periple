@@ -27,6 +27,9 @@ Service times do not affect the tour cost directly (cost is based on travel dist
 
 Each city has one or more time windows `{earliest, latest}`. A vehicle arriving before `earliest` waits; arriving after `latest` is a violation.
 
+> [!WARNING]
+> `held_karp` may report `infeasible` for a feasible instance when windows force waiting (`earliest > 0`); see the known issues in CHANGELOG.md.
+
 ### TimeWindow
 
 ```cpp
