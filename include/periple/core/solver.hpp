@@ -61,6 +61,12 @@ public:
 
 	static constexpr bool has_callbacks = !std::is_same_v<Variant, NoCallbacks>;
 
+	// Every tour is costed by appending, so AppendMove is required everywhere.
+	static_assert(detail::covers_move<Variant, AppendMove<city_type>, context_type, city_type>::value,
+		"variant has callbacks but none for AppendMove: every tour is costed by appending, so it would be ignored");
+	static_assert(context_type::template dims_handle<AppendMove<city_type>, Dist>,
+		"a dimension has no AppendMove init or commit, so its state would not follow the tour");
+
 	// --- Lifecycle ----------------------------------------------------------
 
 	Solver() = default;
@@ -680,6 +686,8 @@ auto Solver<Dist, Variant>::evaluate_replay(
     CityFn&& city_at, std::size_t from_pos,
     cost_type prefix_cost) const -> std::optional<cost_type>
 {
+	static_assert(context_type::replay_safe,
+		"evaluate_replay: a dimension commits AppendMove state without staging (begin_staging, discard_staging, save_staging, commit_staging), so a rejected candidate would overwrite the committed tour's state");
 	assert(dist_ && "evaluate_replay: no distance source set");
 	assert(n_ == dist_->size() && "evaluate_replay: solver must have a complete tour");
 	assert(from_pos >= 1 && from_pos < n_ && "evaluate_replay: from_pos out of range");

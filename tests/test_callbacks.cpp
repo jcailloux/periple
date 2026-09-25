@@ -174,6 +174,27 @@ void test_protocol_held_karp_logging() {
 		assert(cb.log[k] == "move_prepare" && "rebuild_and_cost replays the tour through move_prepare alone");
 }
 
+// During construction the context exposes the placed prefix.
+struct SeesPrefix {
+	template <typename CityT, typename Ctx>
+	bool move_filter(const AppendMove<CityT>& m, const Ctx& ctx) const {
+		assert(ctx.tour().size() == m.pos && "construction must expose the placed prefix");
+		assert(ctx.position().size() == m.pos && "and its inverse index");
+		return true;
+	}
+
+	template <typename CityT>
+	bool move_filter(const DPMove<CityT>&) const { return true; }
+};
+
+void test_protocol_construction_sees_prefix() {
+	auto mat = make_mat4();
+	SeesPrefix variant;
+	Solver solver(mat, variant);
+	solver.nearest_neighbor();
+	assert(solver.status() == SolutionStatus::feasible && "SeesPrefix rejects nothing, so the construction must complete");
+}
+
 // ---------------------------------------------------------------------------
 // Unit: move_filter rejects a specific city
 // ---------------------------------------------------------------------------
@@ -696,6 +717,7 @@ int main() {
 		{"protocol_reversal_replay",     test_protocol_reversal_replay},
 		{"protocol_two_opt_replay",      test_protocol_two_opt_replay},
 		{"protocol_held_karp_logging",   test_protocol_held_karp_logging},
+		{"protocol_construction_sees_prefix", test_protocol_construction_sees_prefix},
 		// Unit - move_filter
 		{"move_filter_reject",           test_move_filter_reject},
 		// Unit - move_prepare

@@ -230,31 +230,39 @@ concept Dimension = requires(T& t, std::size_t n) {
 
 Additionally, a dimension should provide (detected by overload resolution, not the concept):
 
-- `init(Move, Dist)` or `init(Move, Dist, Ctx)` -- initialize tentative state from the committed state of the previous position. The 3-param form receives the context, giving access to `tour()`, `position()`, and previously initialized dimensions.
+- `init(Move, Dist)` or `init(Move, Dist, Ctx)` -- initialize tentative state from the committed state of the previous position, found at `m.pos - 1` for an `AppendMove`. The 3-param form also receives the context: the dimensions initialized before this one and, during construction, `ctx.tour()` and `ctx.position()`.
 - `commit(Move)` -- write tentative state to committed storage.
+- `begin_staging(from)`, `discard_staging()`, `save_staging(to)`, `commit_staging(to)` -- required if the dimension commits state on `AppendMove`: a replay (`two_opt`) evaluates candidates without overwriting the committed tour. Store committed values in a `periple::StagedVector` and forward these calls to it, as `RouteTiming` does.
 - `snapshot(Move) -> SnapshotType` and `restore(SnapshotType)` -- save and restore tentative state for constructive algorithms (evaluate/snapshot/restore pattern).
 
-Each method is overloaded per move type (`AppendMove`, `DPMove`). See `RouteTiming` in `core/dimensions/route_timing.hpp` for a complete example.
+Each method is overloaded per move type (`AppendMove`, `DPMove`), and an algorithm compiles with the dimensions that handle the move types it emits. See `RouteTiming` in `core/dimensions/route_timing.hpp` for a complete example.
 
 ### Example: custom dimension
 
 ```cpp
+#include <periple/core/staged_vector.hpp>
+
 struct RouteLoad {
-    // Tentative
+    // Tentative: load after the appended city (move_prepare adds its demand)
     double load = 0;
     std::size_t pos_ = 0;
 
-    // Committed (per-position)
-    std::vector<double> loads;
+    // Committed per position; staged so a replay leaves it intact until accepted
+    periple::StagedVector<double> loads;
 
     void resize(std::size_t n) { loads.resize(n); }
-    void reset() { load = 0; std::fill(loads.begin(), loads.end(), 0.0); }
+    void reset() { loads.fill(0.0); }
 
-    // AppendMove: 3-param init (reads ctx for previous position)
-    template <periple::DistanceSource Dist, typename CityT, typename Ctx>
-    void init(const periple::AppendMove<CityT>& m, const Dist&, const Ctx& ctx) {
-        pos_ = ctx.tour().size();
-        load = (pos_ == 0) ? 0.0 : loads[pos_ - 1] + demand(m.city);
+    void begin_staging(std::size_t from) { loads.begin_staging(from); }
+    void discard_staging() { loads.discard_staging(); }
+    void save_staging(std::size_t to) { loads.save_staging(to); }
+    void commit_staging(std::size_t to) { loads.commit(to); }
+    [[nodiscard]] bool staging_active() const { return loads.staging_active(); }
+
+    template <periple::DistanceSource Dist, typename CityT>
+    void init(const periple::AppendMove<CityT>& m, const Dist&) {
+        pos_ = m.pos;
+        load = (m.pos == 0) ? 0.0 : loads[m.pos - 1];
     }
 
     template <typename CityT>
@@ -276,7 +284,13 @@ A variant can then use this dimension:
 ```cpp
 struct CapacityConstraint {
     using dimension = RouteLoad;
+    std::span<const double> demand;
     double max_load;
+
+    template <typename CityT, typename Ctx>
+    void move_prepare(const periple::AppendMove<CityT>& m, Ctx& ctx) const {
+        ctx.template dim<RouteLoad>().load += demand[static_cast<std::size_t>(m.city)];
+    }
 
     template <typename CityT, typename Ctx>
     bool move_filter(const periple::AppendMove<CityT>&, const Ctx& ctx) const {
@@ -284,6 +298,8 @@ struct CapacityConstraint {
     }
 };
 ```
+
+This pair supports construction and local search. `DPMove` overloads, as in `RouteTiming`, extend it to `held_karp`.
 
 Or combine dimensions:
 

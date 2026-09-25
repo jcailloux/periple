@@ -39,3 +39,39 @@ target_include_directories(test_replay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME replay COMMAND test_replay)
 
 add_subdirectory(algorithms)
+
+# Each program must abort on an assert whose message matches.
+function(periple_death_test name message)
+    add_executable(death_${name} death/${name}.cpp)
+    target_link_libraries(death_${name} PRIVATE periple::periple)
+    add_test(NAME death_${name}
+             COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:death_${name}>
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/death/expect_abort.cmake)
+    set_tests_properties(death_${name} PROPERTIES PASS_REGULAR_EXPRESSION "${message}")
+endfunction()
+
+periple_death_test(replay_reads_tour "ctx.tour\\(\\): no partial tour during a replay or a DP")
+periple_death_test(dp_reads_tour "ctx.tour\\(\\): no partial tour during a replay or a DP")
+
+# Each file must fail to compile with the given static_assert message.
+function(periple_compile_fail name message)
+    add_executable(compile_fail_${name} EXCLUDE_FROM_ALL compile_fail/${name}.cpp)
+    target_link_libraries(compile_fail_${name} PRIVATE periple::periple)
+    add_test(NAME compile_fail_${name}
+             COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target compile_fail_${name})
+    # Each test builds in the shared tree: never two at once under ctest -j.
+    set_tests_properties(compile_fail_${name} PROPERTIES
+        PASS_REGULAR_EXPRESSION "${message}"
+        RESOURCE_LOCK periple_build_tree)
+endfunction()
+
+periple_compile_fail(append_only_variant_held_karp
+    "held_karp: the variant, or one of its components, has no DPMove callback")
+periple_compile_fail(composed_partial_held_karp
+    "held_karp: the variant, or one of its components, has no DPMove callback")
+periple_compile_fail(dp_only_variant
+    "variant has callbacks but none for AppendMove")
+periple_compile_fail(append_only_dimension_held_karp
+    "held_karp: a dimension has no DPMove init or commit")
+periple_compile_fail(unstaged_dimension_two_opt
+    "evaluate_replay: a dimension commits AppendMove state without staging")

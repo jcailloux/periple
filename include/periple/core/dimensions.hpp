@@ -9,12 +9,16 @@
 // - Dimension list helpers (normalize, concat, deduplicate)
 // - context_for<Variant>: deduce the right context type from a variant
 // - invoke_prepare / invoke_filter: dispatch to variant callbacks
+// - covers_move, dims_handle, replay_safe: compile-time checks that variants
+//   and dimensions handle every move an algorithm emits
 
 #include <periple/core/traits.hpp>
 #include <periple/core/moves/append_move.hpp>
+#include <periple/core/moves/dp_move.hpp>
 #include <periple/core/dimensions/cumulative_cost.hpp>
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <span>
 #include <tuple>
@@ -80,6 +84,28 @@ struct deduplicate<Dimensions<Ts...>> {
 	using type = typename unique_fold<Dimensions<>, Ts...>::type;
 };
 
+// A replay commits a candidate's moves before it is kept, so per-position state is staged.
+template <typename D, typename CityT, typename Ctx>
+concept commits_append_state =
+	requires(D& d, const AppendMove<CityT>& m, Ctx& ctx) { d.commit(m, ctx); } ||
+	requires(D& d, const AppendMove<CityT>& m) { d.commit(m); };
+
+template <typename D>
+concept stages_state = requires(D& d, std::size_t i) {
+	d.begin_staging(i);
+	d.discard_staging();
+	d.save_staging(i);
+	d.commit_staging(i);
+};
+
+// A dimension takes part in Move when it initializes or commits state for it.
+template <typename D, typename Move, typename Dist, typename Ctx>
+concept dimension_handles_move =
+	requires(D& d, const Move& m, const Dist& dist, Ctx& ctx) { d.init(m, dist, ctx); } ||
+	requires(D& d, const Move& m, const Dist& dist) { d.init(m, dist); } ||
+	requires(D& d, const Move& m, Ctx& ctx) { d.commit(m, ctx); } ||
+	requires(D& d, const Move& m) { d.commit(m); };
+
 } // namespace detail
 
 // ---------------------------------------------------------------------------
@@ -129,6 +155,11 @@ struct EmptyContext {
 	void commit_staging(std::size_t) {}
 	[[nodiscard]] bool staging_active() const { return false; }
 
+	template <typename Move, typename Dist>
+	static constexpr bool dims_handle = true;
+
+	static constexpr bool replay_safe = true;
+
 	struct Snapshot { double cost_delta; };
 	template <typename Move>
 	auto snapshot(const Move&) const -> Snapshot { return {cost_delta}; }
@@ -154,8 +185,15 @@ struct EvalContext {
 	template <typename D> auto& dim() { return std::get<D>(dims_); }
 	template <typename D> const auto& dim() const { return std::get<D>(dims_); }
 
-	[[nodiscard]] auto tour() const -> std::span<const CityT> { return tour_; }
-	[[nodiscard]] auto position() const -> std::span<const CityT> { return position_; }
+	// Construction only: replays and DPs work without a partial tour.
+	[[nodiscard]] auto tour() const -> std::span<const CityT> {
+		assert(tour_known_ && "ctx.tour(): no partial tour during a replay or a DP, read the move and the dimensions instead");
+		return tour_;
+	}
+	[[nodiscard]] auto position() const -> std::span<const CityT> {
+		assert(tour_known_ && "ctx.position(): no partial tour during a replay or a DP, read the move and the dimensions instead");
+		return position_;
+	}
 	[[nodiscard]] auto cost() const -> CostT { return cost_; }
 
 	void resize(std::size_t n) {
@@ -172,6 +210,7 @@ struct EvalContext {
 	          CostT cost) {
 		tour_ = tour;
 		position_ = pos;
+		tour_known_ = true;
 		cost_ = cost;
 		cost_delta = 0;
 		std::apply([&](auto&... ds) {
@@ -183,6 +222,7 @@ struct EvalContext {
 	void init(const Move& m, const Dist& dist, CostT cost) {
 		tour_ = {};
 		position_ = {};
+		tour_known_ = false;
 		cost_ = cost;
 		cost_delta = 0;
 		std::apply([&](auto&... ds) {
@@ -246,6 +286,14 @@ struct EvalContext {
 		}, dims_);
 	}
 
+	// True when every dimension that commits along the tour stages its state.
+	static constexpr bool replay_safe =
+		((detail::stages_state<Dims> || !detail::commits_append_state<Dims, CityT, EvalContext>) && ...);
+
+	// True when every dimension takes part in Move (init or commit).
+	template <typename Move, typename Dist>
+	static constexpr bool dims_handle = (detail::dimension_handles_move<Dims, Move, Dist, EvalContext> && ...);
+
 	// Snapshot parameterized by move type.
 	// Only instantiated when snapshot() is called (e.g. for AppendMove in
 	// constructive algorithms). DP commits inline and never snapshots.
@@ -296,6 +344,7 @@ private:
 
 	std::span<const CityT> tour_;
 	std::span<const CityT> position_;
+	bool tour_known_ = false;
 	CostT cost_{};
 	std::tuple<Dims...> dims_;
 };
@@ -369,5 +418,36 @@ bool invoke_filter(const Variant& v, const Move& m, const Ctx& ctx) {
 		return true;
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Move coverage -- variants handle every move an algorithm emits
+// ---------------------------------------------------------------------------
+
+template <typename... Vs> class Composed;
+
+namespace detail {
+
+template <typename V, typename Move, typename Ctx>
+concept handles_move =
+	requires(const V& v, const Move& m, Ctx& ctx) { v.move_prepare(m, ctx); } ||
+	requires(const V& v, const Move& m) { v.move_prepare(m); } ||
+	requires(const V& v, const Move& m, const Ctx& ctx) { v.move_filter(m, ctx); } ||
+	requires(const V& v, const Move& m) { v.move_filter(m); };
+
+// Every move type that variants write callbacks for.
+template <typename V, typename Ctx, typename CityT>
+concept handles_any_move =
+	handles_move<V, AppendMove<CityT>, Ctx> || handles_move<V, DPMove<CityT>, Ctx>;
+
+// V handles Move or has no callbacks; a Composed is checked per component.
+template <typename V, typename Move, typename Ctx, typename CityT>
+struct covers_move
+	: std::bool_constant<handles_move<V, Move, Ctx> || !handles_any_move<V, Ctx, CityT>> {};
+
+template <typename... Vs, typename Move, typename Ctx, typename CityT>
+struct covers_move<Composed<Vs...>, Move, Ctx, CityT>
+	: std::bool_constant<(covers_move<Vs, Move, Ctx, CityT>::value && ...)> {};
+
+} // namespace detail
 
 } // namespace periple
