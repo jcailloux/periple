@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Known issues
+
+- `held_karp` under time windows with waiting (`earliest > 0`) keeps only the cheapest state per (visited set, city) and can report `infeasible` for a feasible instance. Pinned by `tests/algorithms/test_held_karp_waiting_windows.cpp`.
+
 ## v0.1.0 (2026-09-24)
 
 ### Library
