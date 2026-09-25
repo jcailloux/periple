@@ -2,6 +2,7 @@
 #include <periple/distance/matrix.hpp>
 #include <periple/variants/time_windows.hpp>
 #include <solver_test_access.hpp>
+#include "variant_registry.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -10,6 +11,8 @@
 #include <cstring>
 #include <numeric>
 #include <optional>
+#include <span>
+#include <type_traits>
 #include <vector>
 
 using namespace periple;
@@ -437,6 +440,86 @@ void run_deadline_oracles() {
 }
 
 // ---------------------------------------------------------------------------
+// Shipped variants x all algorithms, against the AppendMove pipeline
+// ---------------------------------------------------------------------------
+
+// Cost of a complete tour through the AppendMove pipeline, nullopt if a
+// move_filter rejects one of its moves or its closing edge.
+template <typename V>
+std::optional<int> pipeline_cost(const DistanceMatrix<int>& dist, const V& variant,
+                                 std::span<const std::size_t> tour) {
+	Solver s(dist, variant);
+	s.append(tour[0]);
+	for (std::size_t k = 1; k < tour.size(); ++k) {
+		if (!s.can_append(tour[k])) return std::nullopt;
+		s.append(tour[k]);
+	}
+	if (s.status() != SolutionStatus::feasible) return std::nullopt;
+	return s.cost();
+}
+
+template <typename V>
+std::optional<int> pipeline_optimum(const DistanceMatrix<int>& dist, const V& variant) {
+	std::vector<std::size_t> tour(dist.size());
+	std::iota(tour.begin(), tour.end(), std::size_t{0});
+	std::optional<int> best;
+	do {
+		const auto cost = pipeline_cost(dist, variant, tour);
+		if (cost && (!best || *cost < *best)) best = cost;
+	} while (std::next_permutation(tour.begin() + 1, tour.end()));
+	return best;
+}
+
+template <typename Entry, typename Algo>
+void test_shipped_variant(const Entry& entry, const Algo& algo, const DistanceMatrix<int>& dist,
+                          std::optional<int> best) {
+	Solver s(dist, entry.variant);
+	run_checked(s, [&] { algo(s); });
+	const bool complete = s.status() == SolutionStatus::optimal || s.status() == SolutionStatus::feasible;
+	if (complete) {
+		assert_valid_tour(dist, s.tour());
+		const auto cost = pipeline_cost(dist, entry.variant, s.tour());
+		assert(cost && "a complete tour must pass every move_filter of the AppendMove pipeline");
+		assert(*cost == s.cost() && "the reported cost must equal the AppendMove pipeline's");
+	}
+	if constexpr (Algo::is_exact) {
+		if constexpr (Entry::exact_optimal)
+			assert((best ? s.status() == SolutionStatus::optimal && s.cost() == *best
+			             : s.status() == SolutionStatus::infeasible)
+				&& "an exact algorithm must reach the AppendMove pipeline's optimum, or report infeasible");
+		else
+			assert((!complete || s.status() == SolutionStatus::optimal)
+				&& "an exact algorithm reports a complete tour as optimal");
+	}
+}
+
+// Random asymmetric instances, n = 1..7, 20 per size.
+void run_shipped_variants() {
+	test::Rng rng{0x2545F4914F6CDD1Dull};
+	for (std::size_t n = 1; n <= 7; ++n) {
+		for (int seed = 0; seed < 20; ++seed) {
+			std::vector<int> w(n * n, 0);
+			for (std::size_t i = 0; i < n; ++i)
+				for (std::size_t j = 0; j < n; ++j)
+					if (i != j) w[i * n + j] = rng.below(30) + 1;
+			std::vector<std::size_t> witness(n);
+			std::iota(witness.begin(), witness.end(), std::size_t{0});
+			for (std::size_t i = n - 1; i > 1; --i)
+				std::swap(witness[i], witness[1 + rng() % i]);
+			test::Instance in{DistanceMatrix<int>(n, w), witness, rng};
+
+			test::for_each_shipped_variant([&]<typename Entry>(std::type_identity<Entry>) {
+				const Entry entry(in);
+				const auto best = pipeline_optimum(in.dist, entry.variant);
+				for_each_algorithm(nullptr, [&](const auto& algo) {
+					test_shipped_variant(entry, algo, in.dist, best);
+				});
+			});
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -499,5 +582,10 @@ int main() {
 	std::printf("deadline_oracles ... ");
 	std::fflush(stdout);
 	run_deadline_oracles();
+	std::printf("OK\n");
+
+	std::printf("shipped_variants ... ");
+	std::fflush(stdout);
+	run_shipped_variants();
 	std::printf("OK\n");
 }
