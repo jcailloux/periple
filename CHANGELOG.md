@@ -14,7 +14,7 @@
 
 ### Known issues
 
-- `held_karp` under time windows with waiting (`earliest > 0`) keeps only the cheapest state per (visited set, city) and can report `infeasible` for a feasible instance. Pinned by `tests/algorithms/test_held_karp_waiting_windows.cpp`.
+- `held_karp` keeps only the cheapest state per (visited set, city). Under time windows, a costlier partial tour that arrives earlier can hold the best completion, so `held_karp` can return a costlier tour as `optimal` (`Strict` with waiting, `Relaxed`) or report `infeasible` for a feasible instance (`Strict` with waiting). Pinned by `tests/algorithms/test_held_karp_time_windows.cpp`.
 
 ## v0.1.0 (2026-09-24)
 
