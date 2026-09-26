@@ -122,6 +122,15 @@ An algorithm that can stop early must satisfy them at the point where it stops.
 
 The steps below use Or-opt as a running example. `algorithms/two_opt.hpp` is a worked example of the same path, for a local search that reuses the Solver's local search primitives.
 
+### Variant and strategy support
+
+Every algorithm honors every TSP variant:
+
+- **Variant callbacks.** Every move the algorithm evaluates or applies goes through the variant pipeline: `ctx_.init`, `invoke_prepare`, `invoke_filter`, then `ctx_.commit` for an applied move. The primitives `evaluate_append` / `append`, `evaluate_replay` / `accept_replay` and `evaluate_reversal` / `accept_reversal` do this for you. With a variant set, every decision and every cost comes from the pipeline. Callbacks read `ctx.tour()` and `ctx.position()` during construction only.
+- **Move types.** Prefer an existing move type, see [Step 2](#step-2-define-move-types-only-if-needed). `Solver` checks `AppendMove` coverage itself, and `evaluate_replay` checks staging. For each other move type the algorithm emits, add the `static_assert`s that the variant and its dimensions handle it, as `held_karp` does for `DPMove`.
+- **Strategy callbacks.** If a framework exists for the algorithm's family, the algorithm is a strategy of it: `nearest_neighbor()` is `greedy_construct(NearestSelector{})`. A framework is introduced when a second algorithm shares the same skeleton. An exact algorithm has no strategy.
+- **Justified exceptions.** A method that genuinely cannot honor a variant, because it is impossible or unreasonably costly, rejects it with a `static_assert` giving the reason, as `rotate_to_front` and `path_cost` do. State the reason in its declaration comment, list the case in the "Applicability" table of [CALLBACKS.md](CALLBACKS.md), and add a [compile-fail test](#compile-fail-tests). Each variant is thus either honored or rejected at compile time.
+
 ### Step 1: Parameter struct
 
 In `core/solver.hpp`, add a parameter struct with sensible defaults:
@@ -135,7 +144,7 @@ struct OrOptParams {
 
 ### Step 2: Define Move types (only if needed)
 
-Only if the existing move types do not describe what your algorithm evaluates. Move types are part of the public interface and determine which callback overloads users can provide; each lives in its own header under `core/moves/`:
+Add one when the existing move types cannot describe what your algorithm evaluates. Move types are part of the public interface and determine which callback overloads users can provide; each lives in its own header under `core/moves/`:
 
 ```cpp
 // core/moves/or_opt_move.hpp
@@ -146,7 +155,10 @@ struct OrOptMove {
 };
 ```
 
-A new move type requires adding overloads to existing variants. Existing variant updates will be handled during review -- open your PR with the algorithm and the maintainer will handle variant updates if needed.
+A new move type needs:
+- an entry in `detail::handles_any_move` (`core/dimensions.hpp`), so the compile-time checks cover it;
+- overloads in every shipped variant that can honor it, in the shipped dimensions (`core/dimensions/`), in `LoggingCallbacks` and in the `EdgeSurcharge` and `ForbiddenEdges` oracles of `test_variants.cpp`;
+- a row in the move types table of [CALLBACKS.md](CALLBACKS.md).
 
 2-opt needed none: it scores a candidate tour by replaying the changed suffix as a sequence of `AppendMove`, so every existing variant works with it unchanged. Prefer that over a new move type unless an O(1) evaluation per dimension is the point of the algorithm.
 
@@ -219,14 +231,28 @@ using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoNNTwoOpt
 
 The registry runs each entry on a fresh solver, so an improvement heuristic has to construct a tour first. Guard the improvement call: under a hard constraint the construction can stop early, leaving nothing to improve.
 
-This automatically enables the algorithm in `test_algorithms` (contract tests), `test_variants` (variant cross-product tests), and the [benchmark runner](BENCHMARKING.md).
+This enables the algorithm in the [automated tests](#automated-algorithm-tests) and the [benchmark runner](BENCHMARKING.md).
 
 ### Step 7: Verify
 
 ```bash
 cmake --build .build/debug
-ctest --test-dir .build/debug -R "algorithms|variants" --output-on-failure
+ctest --test-dir .build/debug --output-on-failure
 ```
+
+Then go through the [Definition of done](#definition-of-done).
+
+### Definition of done
+
+A PR adding an algorithm is complete when:
+
+- the [automated tests](#automated-algorithm-tests) pass in Debug and Release;
+- the algorithm follows [Variant and strategy support](#variant-and-strategy-support), and a new move type comes with everything listed in [Step 2](#step-2-define-move-types-only-if-needed);
+- `tests/test_callbacks.cpp` has a protocol test using `LoggingCallbacks`: exact counts and order of `move_prepare` / `move_filter` on a small instance, for each move type the algorithm emits (see `protocol_held_karp_logging`);
+- [algorithm-specific tests](#algorithm-specific-tests) cover any behavior beyond the common contract;
+- removing the algorithm's `invoke_filter` calls, then its `invoke_prepare` calls, then its `ctx_.commit` calls makes at least one test fail each time. Check it once by hand and revert: it proves the tests see the variant;
+- `README.md` ("Available algorithms"), `CALLBACKS.md` ("Applicability") and `CHANGELOG.md` (`## Unreleased`, public interface changes under `### Breaking`) are updated, and a new test file is added to the tree in [Writing tests](#writing-tests) and to `CLAUDE.md`;
+- the PR description includes the [benchmark results](#benchmark-requirements).
 
 <details>
 <summary><b>Optional: Add an algorithm-specific cache</b></summary>
@@ -315,9 +341,11 @@ struct Strict {
 } // namespace periple::my_constraint
 ```
 
+Provide callbacks for `AppendMove` and `DPMove`. A constraint that an exact DP cannot honor keeps `AppendMove` alone, with the reason in the header; `held_karp` then refuses to compile with the variant.
+
 ### Step 2: Write tests
 
-Add focused tests in `tests/` for specific behaviors. Add the variant to `tests/algorithms/test_variants.cpp` for cross-algorithm testing.
+Add an entry to `tests/algorithms/variant_registry.hpp`: `test_variants` then runs the variant under every registered algorithm, against the brute-force optimum of the `AppendMove` pipeline. `exact_optimal = false` marks a [known bug](#known-bugs). Add focused tests in `tests/` for behaviors specific to the variant.
 
 ### Step 3: Document
 
@@ -327,7 +355,7 @@ See `variants/time_windows.hpp` and `variants/service_times.hpp` for complete ex
 
 ## Writing tests
 
-Tests use plain `assert()` with descriptive messages. Core tests live in `tests/`. Algorithm tests are in `tests/algorithms/`.
+Tests use plain `assert()` with descriptive messages. Core tests live in `tests/`. Algorithm tests are in `tests/algorithms/`. Asserts stay active in every build type: `tests/CMakeLists.txt` removes `NDEBUG`, so the Release job checks as much as the Debug one.
 
 ```
 tests/
@@ -337,23 +365,27 @@ tests/
     test_callbacks.cpp
     test_composed.cpp
     test_replay.cpp
+    test_jonker_volgenant.cpp
+    test_tsplib_parser.cpp
+    logging_callbacks.hpp
     solver_test_access.hpp
+    compile_fail/       one file per combination rejected at compile time
+    death/              one program per misuse caught by an assert
     algorithms/
         CMakeLists.txt
         test_algorithms.cpp
         test_variants.cpp
+        variant_registry.hpp
         test_two_opt.cpp
+        test_held_karp_time_windows.cpp
 ```
 
 ### Automated algorithm tests
 
-Any algorithm registered in the [algorithm registry](#step-6-register-in-the-algorithm-registry) is automatically tested by `test_algorithms`. For each algorithm, the runner checks:
+Any algorithm registered in the [algorithm registry](#step-6-register-in-the-algorithm-registry) is tested automatically:
 
-1. **Tour validity** -- every city appears exactly once (sizes 0 through 5).
-2. **Cost consistency** -- reported cost matches the recomputed sum of edge weights.
-3. **Optimality** -- exact algorithms must match the brute-force optimum; heuristics must be >= optimum.
-4. **Symmetric instances** -- tested with `SymmetricDistanceMatrix`.
-5. **Asymmetric instances** -- tested with `DistanceMatrix`.
+- **`test_algorithms`**: valid tour (sizes 0 to 5), reported cost equal to a recomputation, the brute-force optimum for an exact algorithm and at least the optimum for a heuristic, on symmetric and asymmetric instances, a second run after `set_matrix`, and the [output invariants](#output-invariants) around every call.
+- **`test_variants`**: every shipped variant of `tests/algorithms/variant_registry.hpp`, against the brute-force optimum of the `AppendMove` pipeline; and oracles with a constrained optimum known by brute force, one per mechanism: a surcharge per edge (`move_prepare`), forbidden edges (`move_filter`), deadlines (a dimension).
 
 Run a single algorithm's tests by passing its tag:
 
@@ -365,6 +397,18 @@ Run a single algorithm's tests by passing its tag:
 ### Algorithm-specific tests
 
 The automated suite covers the common contract. If your algorithm has specific behavior worth testing (improvement invariants, parameter variations, etc.), add a dedicated test file in `tests/algorithms/` and register it in `tests/algorithms/CMakeLists.txt`.
+
+### Compile-fail tests
+
+A combination rejected at compile time is tested in `tests/compile_fail/`, one file per case, registered with `periple_compile_fail(name "static_assert message")` in `tests/CMakeLists.txt`. The test passes when the build fails with that message.
+
+### Death tests
+
+A misuse caught by an assert is tested in `tests/death/`, one program per case, registered with `periple_death_test(name "assert message")` in `tests/CMakeLists.txt`. The test passes when the program aborts with that message.
+
+### Known bugs
+
+A known bug is pinned by a test that asserts the wrong result, in its own executable, with a comment saying so (see `test_held_karp_time_windows.cpp`). It fails once the bug is fixed: turn it into an ordinary test then. List the bug under `### Known issues` in `CHANGELOG.md`.
 
 ## Performance guidelines
 
