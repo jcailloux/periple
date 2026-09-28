@@ -5,6 +5,7 @@
 #include <periple/algorithms/held_karp.hpp>
 #include <periple/algorithms/two_opt.hpp>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <tuple>
@@ -15,7 +16,25 @@ namespace periple {
 // Algorithm descriptors -- one struct per algorithm
 // ---------------------------------------------------------------------------
 
-struct AlgoNearestNeighbor {
+// Options every descriptor forwards to its algorithm.
+struct RunOptions {
+	unsigned seed = 0;                        // metaheuristics
+	std::chrono::nanoseconds time_limit{0};   // the algorithm's own time_limit (0 = no limit)
+};
+
+// Base of every descriptor. run is the algorithm under test; setup, optional,
+// builds the tour an improvement algorithm starts from, outside its time limit.
+template <typename Derived>
+struct Algorithm {
+	template <DistanceSource Dist, typename V>
+	void operator()(Solver<Dist, V>& s, const RunOptions& options = {}) const {
+		const auto& self = static_cast<const Derived&>(*this);
+		if constexpr (requires { self.setup(s); }) self.setup(s);
+		self.run(s, options);
+	}
+};
+
+struct AlgoNearestNeighbor : Algorithm<AlgoNearestNeighbor> {
 	static constexpr const char* tag  = "NN";
 	static constexpr const char* name = "nearest_neighbor";
 	static constexpr bool is_exact          = false;
@@ -24,10 +43,10 @@ struct AlgoNearestNeighbor {
 	static constexpr int  max_tier          = 5;
 
 	template <DistanceSource Dist, typename V>
-	void operator()(Solver<Dist, V>& s, unsigned = 0) const { s.nearest_neighbor(); }
+	void run(Solver<Dist, V>& s, const RunOptions& o) const { s.nearest_neighbor({.time_limit = o.time_limit}); }
 };
 
-struct AlgoHeldKarp {
+struct AlgoHeldKarp : Algorithm<AlgoHeldKarp> {
 	static constexpr const char* tag  = "HK";
 	static constexpr const char* name = "held_karp";
 	static constexpr bool is_exact          = true;
@@ -36,13 +55,13 @@ struct AlgoHeldKarp {
 	static constexpr int  max_tier          = 1;
 
 	template <DistanceSource Dist, typename V>
-	void operator()(Solver<Dist, V>& s, unsigned = 0) const { s.held_karp(); }
+	void run(Solver<Dist, V>& s, const RunOptions& o) const { s.held_karp({.time_limit = o.time_limit}); }
 };
 
 // Improvement pipeline: nearest neighbor construction followed by 2-opt.
 // A strict variant can leave the construction partial or infeasible, in which
 // case there is nothing to improve.
-struct AlgoNNTwoOpt {
+struct AlgoNNTwoOpt : Algorithm<AlgoNNTwoOpt> {
 	static constexpr const char* tag  = "2O";
 	static constexpr const char* name = "nn_two_opt";
 	static constexpr bool is_exact          = false;
@@ -51,9 +70,11 @@ struct AlgoNNTwoOpt {
 	static constexpr int  max_tier          = 5;
 
 	template <DistanceSource Dist, typename V>
-	void operator()(Solver<Dist, V>& s, unsigned = 0) const {
-		s.nearest_neighbor();
-		if (s.status() == SolutionStatus::feasible) s.two_opt();
+	void setup(Solver<Dist, V>& s) const { s.nearest_neighbor(); }
+
+	template <DistanceSource Dist, typename V>
+	void run(Solver<Dist, V>& s, const RunOptions& o) const {
+		if (s.status() == SolutionStatus::feasible) s.two_opt({.time_limit = o.time_limit});
 	}
 };
 

@@ -12,6 +12,7 @@
 #include <fstream>
 #include <functional>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -222,7 +223,7 @@ struct BenchmarkResult {
 	std::size_t n;
 	long long optimum;
 	long long cost;         // best cost (= only cost for single-run)
-	double gap_pct;
+	std::optional<double> gap_pct;  // none for an invalid tour or an unknown optimum
 	double wall_time_ms;
 	double cpu_time_ms;
 	double peak_rss_mb;
@@ -236,10 +237,13 @@ struct BenchmarkResult {
 
 inline const char* status_string(periple::SolutionStatus s) {
 	switch (s) {
-	case periple::SolutionStatus::optimal:  return "optimal";
-	case periple::SolutionStatus::feasible: return "feasible";
-	default: return "none";
+	case periple::SolutionStatus::optimal:    return "optimal";
+	case periple::SolutionStatus::feasible:   return "feasible";
+	case periple::SolutionStatus::partial:    return "partial";
+	case periple::SolutionStatus::infeasible: return "infeasible";
+	case periple::SolutionStatus::none:       return "none";
 	}
+	return "none";
 }
 
 // ---------------------------------------------------------------------------
@@ -326,9 +330,12 @@ public:
 					"Instance", "N", "Optimum", "Cost",
 					"Gap(%)", "Time(ms)", "Valid", "Status");
 			}
-			std::printf("%-14s %5zu %10lld %10lld %8.2f %10.2f %5s %s",
-				r.instance.c_str(), r.n, r.optimum, r.cost,
-				r.gap_pct, r.wall_time_ms,
+			std::printf("%-14s %5zu %10lld %10lld ",
+				r.instance.c_str(), r.n, r.optimum, r.cost);
+			if (r.gap_pct) std::printf("%8.2f", *r.gap_pct);
+			else           std::printf("%8s", "-");
+			std::printf(" %10.2f %5s %s",
+				r.wall_time_ms,
 				r.valid ? "yes" : "NO",
 				r.status.c_str());
 			if (r.runs > 1)
@@ -351,7 +358,7 @@ public:
 		}
 
 		// Build lookup: (algo, instance) -> gap
-		std::unordered_map<std::string, double> gaps;
+		std::unordered_map<std::string, std::optional<double>> gaps;
 		std::unordered_map<std::string, long long> optima;
 		for (const auto& r : results) {
 			gaps[r.algorithm + ":" + r.instance] = r.gap_pct;
@@ -368,10 +375,12 @@ public:
 			std::printf("%-14s", inst.c_str());
 			for (const auto& a : algos) {
 				auto it = gaps.find(a + ":" + inst);
-				if (it != gaps.end())
-					std::printf(" %+11.2f%%", it->second);
-				else
+				if (it == gaps.end())
 					std::printf(" %12s", "N/A");
+				else if (it->second)
+					std::printf(" %+11.2f%%", *it->second);
+				else
+					std::printf(" %12s", "-");
 			}
 			std::printf(" %10lld\n", optima[inst]);
 		}
@@ -408,7 +417,10 @@ public:
 			f << "      \"n\": " << r.n << ",\n";
 			f << "      \"optimum\": " << r.optimum << ",\n";
 			f << "      \"cost\": " << r.cost << ",\n";
-			f << "      \"gap_pct\": " << r.gap_pct << ",\n";
+			f << "      \"gap_pct\": ";
+			if (r.gap_pct) f << *r.gap_pct;
+			else           f << "null";
+			f << ",\n";
 			f << "      \"wall_time_ms\": " << r.wall_time_ms << ",\n";
 			f << "      \"cpu_time_ms\": " << r.cpu_time_ms << ",\n";
 			f << "      \"peak_rss_mb\": " << r.peak_rss_mb << ",\n";
@@ -450,12 +462,10 @@ private:
 		else
 			run_with_matrix(algo, path, r);
 
-		// Compute gap
-		if (r.optimum > 0)
+		// Compute gap: meaningless for an incomplete tour (a stopped run)
+		if (r.valid && r.optimum > 0)
 			r.gap_pct = 100.0 * (r.cost - r.optimum)
 						/ static_cast<double>(r.optimum);
-		else
-			r.gap_pct = -1.0;
 
 		return r;
 	}
