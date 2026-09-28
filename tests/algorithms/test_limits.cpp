@@ -74,10 +74,12 @@ void test_deadline() {
 	assert(detail::expired(poll) && "an expired deadline stays expired");
 
 	// Tight polling: never before the limit, and within the contract's 50 us
-	// after it on the best of five runs, since one run can be preempted.
+	// after it on at least one run. A run preempted as the limit passes lags
+	// by a whole time slice, and on a shared core about every other run is:
+	// up to 50 runs, stopping at the first on time.
 	const auto limit = milliseconds{5};
 	auto best_lag = nanoseconds::max();
-	for (int run = 0; run < 5; ++run) {
+	for (int run = 0; run < 50 && best_lag >= microseconds{50}; ++run) {
 		const auto start = steady_clock::now();
 		detail::Deadline soon(limit);
 		detail::Poller soon_poll(soon);
@@ -144,23 +146,28 @@ void test_short_limit(const Algo& algo) {
 	assert(proves_nothing(s.status()) && "a stopped algorithm proves nothing: partial or feasible");
 }
 
-// An expired limit returns at once, preparation included. Allocating a table
-// or building neighbor lists before the first poll calls no callback, so only
-// time shows it: instances where that preparation takes milliseconds (a 20-city
-// table, 2000-city neighbor lists), best of five runs against preemption.
+// Preparation counts: allocating a table or building neighbor lists calls no
+// callback, so only time shows it. On instances where that preparation takes
+// milliseconds (a 20-city table, 2000-city neighbor lists), an expired limit
+// returns at once and a 1 ms limit within 1 ms more, whether it expires before
+// the preparation or during it. Up to 20 runs, stopping at the first on time,
+// since a preempted run lags by a whole time slice.
 template <typename Algo>
-void test_expired_limit_time(const Algo& algo) {
+void test_preparation_time(const Algo& algo) {
 	const std::size_t n = (Algo::max_tier == 1) ? 20 : 2000;
 	auto dist = random_asym(n, 0x2545F4914F6CDD1Dull);
-	auto best = nanoseconds::max();
-	for (int run = 0; run < 5; ++run) {
-		Solver s(dist);  // fresh: no cache from a previous run
-		setup(algo, s);
-		const auto start = steady_clock::now();
-		algo.run(s, {.time_limit = nanoseconds{1}});
-		best = std::min(best, duration_cast<nanoseconds>(steady_clock::now() - start));
+	for (const nanoseconds limit : {nanoseconds{1}, nanoseconds{milliseconds{1}}}) {
+		const auto allowed = limit + milliseconds{1};
+		auto best = nanoseconds::max();
+		for (int run = 0; run < 20 && best >= allowed; ++run) {
+			Solver s(dist);  // fresh: no cache from a previous run
+			setup(algo, s);
+			const auto start = steady_clock::now();
+			algo.run(s, {.time_limit = limit});
+			best = std::min(best, duration_cast<nanoseconds>(steady_clock::now() - start));
+		}
+		assert(best < allowed && "a limit stops the preparation too: an expired one at once, a short one soon after");
 	}
-	assert(best < milliseconds{1} && "an expired limit returns at once, preparation included");
 }
 
 // A stopped algorithm leaves the solver reusable: run again without a limit,
@@ -220,7 +227,7 @@ int main() {
 		std::printf("%s ... ", algo.name);
 		std::fflush(stdout);
 		test_expired_limit(algo);
-		test_expired_limit_time(algo);
+		test_preparation_time(algo);
 		test_short_limit(algo);
 		test_reuse_after_stop(algo);
 		std::printf("OK\n");

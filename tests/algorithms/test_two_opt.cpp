@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <numeric>
@@ -494,6 +495,104 @@ void test_optimal_is_noop() {
 }
 
 // ---------------------------------------------------------------------------
+// Neighbor lists: every list declared ready matches a fresh computation, and
+// none is ready after set_matrix, however the lists were filled.
+// ---------------------------------------------------------------------------
+
+// All distances distinct: a neighbor list does not depend on how ties are
+// broken, so any correct build gives the reference lists exactly.
+DistanceMatrix<int> distinct_asym(std::size_t n, std::uint64_t x) {
+	std::vector<int> values(n * (n - 1));
+	std::iota(values.begin(), values.end(), 1);
+	for (std::size_t i = values.size() - 1; i > 0; --i) {
+		x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+		std::swap(values[i], values[x % (i + 1)]);
+	}
+	std::vector<int> w(n * n, 0);
+	std::size_t v = 0;
+	for (std::size_t i = 0; i < n; ++i)
+		for (std::size_t j = 0; j < n; ++j)
+			if (i != j) w[i * n + j] = values[v++];
+	return DistanceMatrix<int>(n, w);
+}
+
+// Checks every ready list against the reference solver; returns how many are ready.
+template <typename S, typename R>
+std::size_t check_ready_lists(const S& s, R& reference, std::size_t k) {
+	SolverTestAccess access(s);
+	std::size_t ready = 0;
+	for (std::size_t c = 0; c < s.size(); ++c) {
+		if (!access.neighbors_ready(c, k)) continue;
+		++ready;
+		const auto got = access.neighbor_list(c, k);
+		const auto want = reference.neighbors(c, k);
+		assert(std::equal(got.begin(), got.end(), want.begin(), want.end())
+			&& "a neighbor list declared ready matches a fresh computation");
+	}
+	return ready;
+}
+
+// A limit cutting a build of these lists about a twentieth of the way, on the
+// machine running the test: timed on the reference solver, whose own build
+// this triggers. Debug or Release, fast or loaded, the cut lands midway.
+template <typename R>
+std::chrono::nanoseconds calibrated_limit(R& reference, std::size_t k) {
+	const auto start = std::chrono::steady_clock::now();
+	(void)reference.neighbors(0, k);
+	const auto build = std::chrono::steady_clock::now() - start;
+	return std::chrono::duration_cast<std::chrono::nanoseconds>(build / 20);
+}
+
+// A build cut by short limits and resumed call after call: every list declared
+// ready along the way is right, and the build completes.
+void test_neighbors_resumed_build() {
+	constexpr std::size_t n = 2000, k = 10;
+	const auto dist = distinct_asym(n, 0x9E3779B97F4A7C15ull);
+	Solver reference(dist);
+	const auto limit = calibrated_limit(reference, k);
+	Solver s(dist);
+	s.nearest_neighbor();
+
+	bool midway = false;
+	std::size_t ready = 0;
+	for (int call = 0; call < 10000 && ready < n; ++call) {
+		s.two_opt({.neighbors = k, .time_limit = limit});
+		ready = check_ready_lists(s, reference, k);
+		midway = midway || (ready > 0 && ready < n);
+	}
+	assert(midway && "setup: a limited call must stop the build midway, or nothing is tested");
+	assert(ready == n && "limited calls, repeated, complete the build");
+}
+
+// A build cut midway, then set_matrix: no list stays ready, and the next build
+// gives the lists of the new instance.
+void test_neighbors_set_matrix_after_stop() {
+	constexpr std::size_t n = 2000, k = 10;
+	const auto first  = distinct_asym(n, 0x9E3779B97F4A7C15ull);
+	const auto second = distinct_asym(n, 0xBF58476D1CE4E5B9ull);
+	Solver reference(second);
+	const auto limit = calibrated_limit(reference, k);
+	Solver s(first);
+	s.nearest_neighbor();
+
+	std::size_t ready = 0;
+	for (int call = 0; call < 10000 && ready == 0; ++call) {
+		s.two_opt({.neighbors = k, .time_limit = limit});
+		ready = SolverTestAccess(s).neighbors_ready(0, k) ? 1 : 0;
+	}
+	assert(ready == 1 && !SolverTestAccess(s).neighbors_ready(n - 1, k)
+		&& "setup: the build must be stopped midway");
+
+	s.set_matrix(second);
+	for (std::size_t c = 0; c < n; ++c)
+		assert(!SolverTestAccess(s).neighbors_ready(c, k) && "set_matrix leaves no neighbor list ready");
+
+	s.nearest_neighbor();
+	s.two_opt({.neighbors = k, .max_moves = 1});  // the build, not a full descent
+	assert(check_ready_lists(s, reference, k) == n && "after set_matrix, the build gives the new instance's lists");
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -520,6 +619,9 @@ int main() {
 		// Degenerate cases
 		{"trivial_sizes",                test_trivial_sizes},
 		{"optimal_is_noop",              test_optimal_is_noop},
+		// Neighbor lists
+		{"neighbors_resumed_build",      test_neighbors_resumed_build},
+		{"neighbors_set_matrix_after_stop", test_neighbors_set_matrix_after_stop},
 	};
 
 	for (const auto& t : tests) {
