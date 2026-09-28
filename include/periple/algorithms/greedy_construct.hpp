@@ -22,6 +22,17 @@ auto Solver<Dist, Variant>::greedy_construct(
 	Strategy strategy, ConstructParams params)
 	-> Solver&
 {
+	return detail::with_deadline(params.time_limit, [&](auto& deadline) -> Solver& {
+		return greedy_construct_run(strategy, params, deadline);
+	});
+}
+
+template <DistanceSource Dist, typename Variant>
+template <typename Strategy, typename D>
+auto Solver<Dist, Variant>::greedy_construct_run(
+	Strategy& strategy, const ConstructParams& params, D& deadline)
+	-> Solver&
+{
 	assert(dist_ && "greedy_construct: no distance source set");
 	const auto total = dist_->size();
 
@@ -43,7 +54,7 @@ auto Solver<Dist, Variant>::greedy_construct(
 		append(static_cast<city_type>(params.start_city));
 	}
 
-	while (n_ < total) {
+	while (n_ < total && !detail::expired(deadline)) {
 		auto next = strategy.select_next(*this);
 		if (!next) break;
 		append(*next);

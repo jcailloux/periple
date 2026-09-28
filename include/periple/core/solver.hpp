@@ -6,9 +6,11 @@
 #include <periple/core/moves/two_opt_move.hpp>
 #include <periple/core/active_queue.hpp>
 #include <periple/core/local_search_mode.hpp>
+#include <periple/core/deadline.hpp>
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -24,18 +26,23 @@ namespace periple {
 struct NearestNeighborParams {
 	std::size_t start_city = 0;
 	std::size_t resume_at = 0;
+	std::chrono::nanoseconds time_limit{0};  // stop after this much wall time (0 = no limit)
 };
 
-struct HeldKarpParams {};
+struct HeldKarpParams {
+	std::chrono::nanoseconds time_limit{0};  // stop after this much wall time (0 = no limit)
+};
 
 struct ConstructParams {
 	std::size_t start_city = 0;
 	std::size_t resume_at = 0;
+	std::chrono::nanoseconds time_limit{0};  // stop after this much wall time (0 = no limit)
 };
 
 struct TwoOptParams {
 	std::size_t neighbors = 10;  // candidate list size per city (0 = all cities)
 	std::size_t max_moves = 0;   // stop after this many applied moves (0 = no limit)
+	std::chrono::nanoseconds time_limit{0};  // stop after this much wall time (0 = no limit)
 };
 
 // ---------------------------------------------------------------------------
@@ -183,7 +190,9 @@ public:
 private:
 	auto try_trivial() -> bool;
 	void ensure_capacity(std::size_t n);
-	void ensure_neighbors(std::size_t k);
+	// Returns false when the deadline stops the build; the next call resumes it.
+	template <typename D>
+	auto ensure_neighbors(std::size_t k, D& deadline) -> bool;
 	void rebuild_position();
 	void invalidate_caches();
 	void check_symmetry() const;
@@ -196,11 +205,20 @@ private:
 	void reverse_range(std::size_t lo, std::size_t hi);
 	void reverse_cyclic(std::size_t from, std::size_t len);
 
-	template <detail::LocalSearchMode Mode>
-	void two_opt_run(const TwoOptParams& params);
+	// Each algorithm body is instantiated once per deadline type D
+	// (detail::Deadline or detail::NoDeadline), chosen by the public method.
+	template <typename Strategy, typename D>
+	auto greedy_construct_run(Strategy& strategy, const ConstructParams& params, D& deadline) -> Solver&;
 
-	template <detail::LocalSearchMode Mode>
-	auto two_opt_improve(city_type a, std::size_t k, detail::ActiveQueue<city_type>& active) -> bool;
+	template <typename D>
+	auto held_karp_run(D& deadline) -> Solver&;
+
+	template <detail::LocalSearchMode Mode, typename D>
+	void two_opt_run(const TwoOptParams& params, D& deadline);
+
+	template <detail::LocalSearchMode Mode, typename D>
+	auto two_opt_improve(city_type a, std::size_t k, detail::ActiveQueue<city_type>& active,
+	                     D& deadline) -> bool;
 
 	auto variant_ref() const -> const Variant& {
 		if constexpr (std::is_same_v<Variant, NoCallbacks>) {
@@ -233,7 +251,8 @@ private:
 	std::vector<uint8_t>   dont_look_;
 	std::vector<city_type> queue_;     // ActiveQueue slots.
 	std::vector<city_type> neighbors_;
-	std::size_t            neighbors_k_ = 0;
+	std::size_t            neighbors_k_ = 0;      // List size and stride, complete or being built.
+	std::size_t            neighbors_built_ = 0;  // Cities whose list is built (ready when == n).
 
 	// Tour-derived, valid iff path_costs_version_ == tour_version_.
 	std::vector<cost_type> path_fwd_, path_bwd_;
@@ -482,6 +501,7 @@ template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::invalidate_caches() {
 	if (hk_cache_) hk_cache_->reset();
 	neighbors_k_ = 0;
+	neighbors_built_ = 0;
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -520,21 +540,33 @@ template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::neighbors(city_type city, std::size_t k) -> std::span<const city_type> {
 	assert(dist_ && "neighbors: no distance source set");
 	assert(k < dist_->size() && "neighbors: k must be less than number of cities");
-	ensure_neighbors(k);
+	detail::NoDeadline no_limit;
+	(void)ensure_neighbors(k, no_limit);
 	return {neighbors_.data() + static_cast<std::size_t>(city) * neighbors_k_, k};
 }
 
 template <DistanceSource Dist, typename Variant>
-void Solver<Dist, Variant>::ensure_neighbors(std::size_t k) {
-	if (k <= neighbors_k_) return;
-
+template <typename D>
+auto Solver<Dist, Variant>::ensure_neighbors(std::size_t k, D& deadline) -> bool {
 	const auto n = dist_->size();
-	neighbors_k_ = k;
-	neighbors_.resize(n * k);
+	if (k == 0 || (k <= neighbors_k_ && neighbors_built_ == n)) return true;
+
+	// A larger k starts a new build, overwriting the lists (stride k); a
+	// smaller one resumes the build in progress, whose lists it prefixes.
+	if (k > neighbors_k_) {
+		neighbors_k_ = k;
+		neighbors_built_ = 0;
+		neighbors_.resize(n * k);
+	}
+	k = neighbors_k_;
 
 	std::vector<city_type> candidates(n - 1);
 
-	for (std::size_t i = 0; i < n; ++i) {
+	for (std::size_t i = neighbors_built_; i < n; ++i) {
+		if (detail::expired(deadline)) {
+			neighbors_built_ = i;
+			return false;
+		}
 		std::size_t idx = 0;
 		for (std::size_t j = 0; j < n; ++j)
 			if (j != i) candidates[idx++] = static_cast<city_type>(j);
@@ -551,6 +583,9 @@ void Solver<Dist, Variant>::ensure_neighbors(std::size_t k) {
 		            neighbors_.begin() +
 		            static_cast<std::ptrdiff_t>(i * k));
 	}
+
+	neighbors_built_ = n;
+	return true;
 }
 
 // --- rebuild_and_cost -------------------------------------------------------
