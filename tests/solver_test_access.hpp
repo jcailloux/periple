@@ -59,6 +59,19 @@ public:
 		return s_.path_fwd_[s_.n_ - 1] == fwd && s_.path_bwd_[s_.n_ - 1] == bwd;
 	}
 
+	// True if the neighbor list of city c holds at least k complete entries:
+	// the lists are built in city order, the first neighbors_built_ being done.
+	[[nodiscard]] bool neighbors_ready(std::size_t c, std::size_t k) const {
+		return k <= s_.neighbors_k_ && c < s_.neighbors_built_;
+	}
+
+	// The first k entries of the neighbor list of city c, ready or not.
+	[[nodiscard]] auto neighbor_list(std::size_t c, std::size_t k) const
+		-> std::span<const typename Solver<Dist, Variant>::city_type>
+	{
+		return {s_.neighbors_.data() + c * s_.neighbors_k_, k};
+	}
+
 private:
 	const Solver<Dist, Variant>& s_;
 };
