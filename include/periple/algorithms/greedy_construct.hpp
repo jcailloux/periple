@@ -54,7 +54,8 @@ auto Solver<Dist, Variant>::greedy_construct_run(
 		append(static_cast<city_type>(params.start_city));
 	}
 
-	while (n_ < total && !detail::expired(deadline)) {
+	detail::Poller poll(deadline);
+	while (n_ < total && !detail::expired(poll)) {
 		auto next = strategy.select_next(*this);
 		if (!next) break;
 		append(*next);

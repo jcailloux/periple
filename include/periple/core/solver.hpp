@@ -207,6 +207,7 @@ private:
 
 	// Each algorithm body is instantiated once per deadline type D
 	// (detail::Deadline or detail::NoDeadline), chosen by the public method.
+	// Every loop polls D through its own detail::Poller.
 	template <typename Strategy, typename D>
 	auto greedy_construct_run(Strategy& strategy, const ConstructParams& params, D& deadline) -> Solver&;
 
@@ -216,9 +217,9 @@ private:
 	template <detail::LocalSearchMode Mode, typename D>
 	void two_opt_run(const TwoOptParams& params, D& deadline);
 
-	template <detail::LocalSearchMode Mode, typename D>
+	template <detail::LocalSearchMode Mode, typename P>
 	auto two_opt_improve(city_type a, std::size_t k, detail::ActiveQueue<city_type>& active,
-	                     D& deadline) -> bool;
+	                     P& poll) -> bool;
 
 	auto variant_ref() const -> const Variant& {
 		if constexpr (std::is_same_v<Variant, NoCallbacks>) {
@@ -562,8 +563,9 @@ auto Solver<Dist, Variant>::ensure_neighbors(std::size_t k, D& deadline) -> bool
 
 	std::vector<city_type> candidates(n - 1);
 
+	detail::Poller poll(deadline);
 	for (std::size_t i = neighbors_built_; i < n; ++i) {
-		if (detail::expired(deadline)) {
+		if (detail::expired(poll)) {
 			neighbors_built_ = i;
 			return false;
 		}
