@@ -15,16 +15,32 @@
 namespace periple {
 
 template <DistanceSource Dist, typename Variant>
-auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
+auto Solver<Dist, Variant>::held_karp(HeldKarpParams params) -> Solver& {
 	static_assert(detail::covers_move<Variant, DPMove<city_type>, context_type, city_type>::value,
 		"held_karp: the variant, or one of its components, has no DPMove callback, so held_karp would ignore it");
 	static_assert(context_type::template dims_handle<DPMove<city_type>, Dist>,
 		"held_karp: a dimension has no DPMove init or commit, so its state would not follow the DP");
 
+	return detail::with_deadline(params.time_limit, [&](auto& deadline) -> Solver& {
+		return held_karp_run(deadline);
+	});
+}
+
+template <DistanceSource Dist, typename Variant>
+template <typename D>
+auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 	if (try_trivial()) {
 		status_ = SolutionStatus::optimal;
 		return *this;
 	}
+
+	// The table gives no tour until it is complete: back to the start city.
+	auto stop = [this]() -> Solver& {
+		clear();
+		append(city_type{0});
+		return *this;
+	};
+	if (detail::expired(deadline)) return stop();
 
 	constexpr auto INF = std::numeric_limits<cost_type>::max();
 
@@ -36,17 +52,20 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
 
 	const std::size_t num_sets = std::size_t{1} << n_;
 	const std::size_t table_sz = num_sets * n_;
-	hk_cache_->dp.resize(table_sz);
-	hk_cache_->parent.resize(table_sz);
+	hk_cache_->reserve(table_sz);
 
-	auto dp     = std::span<cost_type>(hk_cache_->dp.data(), table_sz);
-	auto parent = std::span<city_type>(hk_cache_->parent.data(), table_sz);
+	auto dp     = std::span<cost_type>(hk_cache_->dp.get(), table_sz);
+	auto parent = std::span<city_type>(hk_cache_->parent.get(), table_sz);
 
 	auto idx = [this](std::size_t S, std::size_t i) -> std::size_t {
 		return S * n_ + i;
 	};
 
-	std::fill_n(dp.begin(), table_sz, INF);
+	// Only sets containing city 0 (odd S) are ever read.
+	for (std::size_t S = 1; S < num_sets; S += 2) {
+		if (detail::expired(deadline)) return stop();
+		std::fill_n(dp.begin() + static_cast<std::ptrdiff_t>(S * n_), n_, INF);
+	}
 
 	// Base: start at city 0
 	dp[idx(1, 0)] = cost_type{};
@@ -59,6 +78,7 @@ auto Solver<Dist, Variant>::held_karp(HeldKarpParams) -> Solver& {
 		for (auto si = S; si; si &= si - 1) {
 			auto i = static_cast<std::size_t>(std::countr_zero(si));
 			if (dp[idx(S, i)] == INF) continue;
+			if (detail::expired(deadline)) return stop();
 
 			auto ci = static_cast<city_type>(i);
 
