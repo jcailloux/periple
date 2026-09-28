@@ -6,19 +6,44 @@
 
 namespace periple::detail {
 
-// Wall-clock budget of one algorithm call, polled once per unit of work. The
-// clock is read at the first poll, then about every `interval`: the stride
-// between reads doubles while reads come faster and halves while they come
-// slower. A read costs about 26 ns; a limit is noticed within about twice
-// `interval` plus one unit of work.
+// Wall-clock budget of one algorithm call: only its end time. Each loop polls
+// it through its own Poller, since the right polling stride depends on the
+// cost of that loop's units of work.
 class Deadline {
 public:
 	using Clock = std::chrono::steady_clock;
 	static constexpr bool timed = true;
 
 	explicit Deadline(std::chrono::nanoseconds limit)
-		: last_(Clock::now())
-		, end_(last_ + std::chrono::duration_cast<Clock::duration>(limit)) {}
+		: end_(Clock::now() + std::chrono::duration_cast<Clock::duration>(limit)) {}
+
+	[[nodiscard]] Clock::time_point end() const { return end_; }
+
+private:
+	Clock::time_point end_;
+};
+
+// No limit: nothing to poll.
+struct NoDeadline {
+	static constexpr bool timed = false;
+};
+
+// Polls a deadline once per unit of work of one loop, whose units cost about
+// the same. The clock is read at the first poll, then about every `interval`:
+// the stride between reads doubles while reads come faster and halves while
+// they come slower. A read costs about 26 ns; a limit is noticed within about
+// twice `interval` plus one unit of work. A stride grown on cheap units would
+// skip reads over costly ones, so every loop opens its own Poller.
+template <typename D>
+class Poller;
+
+template <>
+class Poller<Deadline> {
+public:
+	using Clock = Deadline::Clock;
+	static constexpr bool timed = true;
+
+	explicit Poller(const Deadline& deadline) : end_(deadline.end()) {}
 
 	// True once the limit has passed, and on every later poll.
 	[[nodiscard]] bool expired() {
@@ -43,20 +68,26 @@ private:
 	bool expired_ = false;
 	std::uint32_t stride_ = 1;
 	std::uint32_t countdown_ = 1;  // the first poll reads the clock
-	Clock::time_point last_;
+	Clock::time_point last_{};     // none yet: the first read keeps a stride of 1
 	Clock::time_point end_;
 };
 
-// No limit: nothing to poll. Having no expired() member, it fails to compile
-// wherever a poll bypasses detail::expired.
-struct NoDeadline {
+// Having no expired() member, it fails to compile wherever a poll bypasses
+// detail::expired.
+template <>
+class Poller<NoDeadline> {
+public:
 	static constexpr bool timed = false;
+	explicit Poller(const NoDeadline&) {}
 };
 
-// The poll every algorithm writes: without a limit, no code is instantiated.
 template <typename D>
-[[nodiscard]] bool expired(D& deadline) {
-	if constexpr (D::timed) return deadline.expired();
+Poller(const D&) -> Poller<D>;
+
+// The poll every algorithm writes: without a limit, no code is instantiated.
+template <typename P>
+[[nodiscard]] bool expired(P& poll) {
+	if constexpr (P::timed) return poll.expired();
 	else return false;
 }
 
