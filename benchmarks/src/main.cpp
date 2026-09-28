@@ -2,6 +2,7 @@
 
 #include <periple/algorithms/registry.hpp>
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -14,6 +15,7 @@ int main(int argc, char* argv[]) {
 	const char* algo_filter = nullptr;
 	int min_tier = 1, max_tier = 5;
 	int meta_runs = 10;
+	std::chrono::nanoseconds time_limit{0};
 
 	// Minimal CLI parsing
 	for (int i = 1; i < argc; ++i) {
@@ -31,16 +33,19 @@ int main(int argc, char* argv[]) {
 			algo_filter = argv[++i];
 		} else if (std::strcmp(argv[i], "--runs") == 0 && i + 1 < argc) {
 			meta_runs = std::stoi(argv[++i]);
+		} else if (std::strcmp(argv[i], "--time-limit") == 0 && i + 1 < argc) {
+			time_limit = std::chrono::milliseconds(std::stoi(argv[++i]));
 		} else if (std::strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
 			output_path = argv[++i];
 		} else if (std::strcmp(argv[i], "--help") == 0) {
 			std::printf(
 				"Usage: periple_bench [options]\n"
-				"  --tier N      Run only tier N (e.g. --tier 1,2)\n"
-				"  --algo TAGS   Run only listed algorithms (e.g. --algo NN,HK)\n"
-				"  --runs N      Number of runs for metaheuristics (default: 10)\n"
-				"  --output FILE Write JSON results to FILE\n"
-				"  --help        Show this message\n\n");
+				"  --tier N          Run only tier N (e.g. --tier 1,2)\n"
+				"  --algo TAGS       Run only listed algorithms (e.g. --algo NN,HK)\n"
+				"  --runs N          Number of runs for metaheuristics (default: 10)\n"
+				"  --time-limit MS   Stop each run after MS milliseconds (setup excluded)\n"
+				"  --output FILE     Write JSON results to FILE\n"
+				"  --help            Show this message\n\n");
 			periple::print_algorithm_tags(stdout);
 			return 0;
 		}
@@ -52,7 +57,7 @@ int main(int argc, char* argv[]) {
 		int runs = algo.is_metaheuristic ? meta_runs : 1;
 		algorithms.push_back(bench::make_algorithm(
 			algo.name, algo.is_exact, algo.max_tier, runs,
-			[=](auto& s, unsigned seed) { algo(s, seed); }
+			[=](auto& s, unsigned seed) { algo(s, {.seed = seed, .time_limit = time_limit}); }
 		));
 	});
 
