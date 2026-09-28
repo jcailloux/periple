@@ -46,22 +46,24 @@ auto Solver<Dist, Variant>::two_opt(TwoOptParams params) -> Solver& {
 
 	if (status_ == SolutionStatus::optimal || n_ < 4) return *this;
 
-	if constexpr (has_callbacks) {
-		two_opt_run<detail::LocalSearchMode::replay>(params);
-	} else {
-		if (symmetric_) two_opt_run<detail::LocalSearchMode::symmetric>(params);
-		else            two_opt_run<detail::LocalSearchMode::asymmetric>(params);
-	}
-	return *this;
+	return detail::with_deadline(params.time_limit, [&](auto& deadline) -> Solver& {
+		if constexpr (has_callbacks) {
+			two_opt_run<detail::LocalSearchMode::replay>(params, deadline);
+		} else {
+			if (symmetric_) two_opt_run<detail::LocalSearchMode::symmetric>(params, deadline);
+			else            two_opt_run<detail::LocalSearchMode::asymmetric>(params, deadline);
+		}
+		return *this;
+	});
 }
 
 template <DistanceSource Dist, typename Variant>
-template <detail::LocalSearchMode Mode>
-void Solver<Dist, Variant>::two_opt_run(const TwoOptParams& params) {
+template <detail::LocalSearchMode Mode, typename D>
+void Solver<Dist, Variant>::two_opt_run(const TwoOptParams& params, D& deadline) {
 	const std::size_t n = n_;
 	const std::size_t k = (params.neighbors == 0) ? n - 1
 	                                              : std::min(params.neighbors, n - 1);
-	ensure_neighbors(k);
+	if (!ensure_neighbors(k, deadline)) return;  // tour untouched
 	ensure_capacity(n);  // also clears any staging flag left in ctx_
 	if (dont_look_.size() < n) dont_look_.resize(n);
 	if (queue_.size()     < n) queue_.resize(n);
@@ -76,10 +78,10 @@ void Solver<Dist, Variant>::two_opt_run(const TwoOptParams& params) {
 	                                               : std::numeric_limits<std::size_t>::max();
 	std::size_t moves = 0;
 
-	while (!active.empty() && moves < max_moves) {
+	while (!active.empty() && moves < max_moves && !detail::expired(deadline)) {
 		const city_type a = active.pop();
 		// Retried until no improving move remains, then deactivated.
-		while (moves < max_moves && two_opt_improve<Mode>(a, k, active))
+		while (moves < max_moves && two_opt_improve<Mode>(a, k, active, deadline))
 			++moves;
 		active.deactivate(a);
 	}
@@ -94,11 +96,15 @@ void Solver<Dist, Variant>::two_opt_run(const TwoOptParams& params) {
 }
 
 template <DistanceSource Dist, typename Variant>
-template <detail::LocalSearchMode Mode>
+template <detail::LocalSearchMode Mode, typename D>
 auto Solver<Dist, Variant>::two_opt_improve(
-	city_type a, std::size_t k, detail::ActiveQueue<city_type>& active) -> bool
+	city_type a, std::size_t k, detail::ActiveQueue<city_type>& active, D& deadline) -> bool
 {
 	using detail::LocalSearchMode;
+	// One poll per call in the O(1) modes, one per candidate in replay (O(n) each).
+	if constexpr (Mode != LocalSearchMode::replay)
+		if (detail::expired(deadline)) return false;
+
 	const std::size_t n = n_;
 	const auto& dist = *dist_;
 	auto pos_of = [this](city_type c) {
@@ -198,6 +204,8 @@ auto Solver<Dist, Variant>::two_opt_improve(
 		// No gain-criterion pruning here: inner edges (asymmetric) and
 		// penalties (replay) can make a move improving whatever d(a, c) is.
 		for (city_type c : nbrs) {
+			if constexpr (Mode == LocalSearchMode::replay)
+				if (detail::expired(deadline)) return false;
 			const std::size_t pc = pos_of(c);
 			if (pa >= pc) continue;  // edge a -> c: found when scanning from c
 			// Successor side: a = t[i], c = t[j].
