@@ -136,6 +136,13 @@ solver.nearest_neighbor().two_opt({.neighbors = 10});
 > reverse the segment containing the first city and `tour()[0]` can change.
 > `rotate_to_front(city)` puts a chosen city back in front, at equal cost.
 
+Every algorithm takes a `time_limit`, counted from its call. Stopped early, it
+returns its best complete tour (`feasible`) or else a partial one (`partial`):
+
+```cpp
+solver.two_opt({.time_limit = std::chrono::milliseconds(500)});
+```
+
 ### Variant callbacks
 
 Customize algorithm behavior without modifying internal logic. Variant callbacks are optional and zero-overhead when not used.
@@ -303,7 +310,7 @@ All algorithm methods return `Solver&` for chaining.
 |--------|-------------|
 | `nearest_neighbor(params)` | Construction heuristic |
 | `nearest_neighbor(variant, params)` | With variant callbacks |
-| `two_opt(params)` | 2-opt local search (`neighbors`: candidate list size, `max_moves`) |
+| `two_opt(params)` | 2-opt local search (`neighbors`: candidate list size, `max_moves`, `time_limit`) |
 | `held_karp(params)` | Exact solver |
 | `held_karp(variant, params)` | With variant callbacks (`DPMove`: filter, eval, on_improve) |
 | `greedy_construct(strategy, params)` | Generic construction framework |

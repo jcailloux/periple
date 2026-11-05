@@ -131,6 +131,16 @@ Every algorithm honors every TSP variant:
 - **Strategy callbacks.** If a framework exists for the algorithm's family, the algorithm is a strategy of it: `nearest_neighbor()` is `greedy_construct(NearestSelector{})`. A framework is introduced when a second algorithm shares the same skeleton. An exact algorithm has no strategy.
 - **Justified exceptions.** A method that genuinely cannot honor a variant, because it is impossible or unreasonably costly, rejects it with a `static_assert` giving the reason, as `rotate_to_front` and `path_cost` do. State the reason in its declaration comment, list the case in the "Applicability" table of [CALLBACKS.md](CALLBACKS.md), and add a [compile-fail test](#compile-fail-tests). Each variant is thus either honored or rejected at compile time.
 
+### Time limit support
+
+Every algorithm honors a time limit, as it honors every variant: `time_limit` in its [params](#step-1-parameter-struct), forwarded by its [descriptor](#step-6-register-in-the-algorithm-registry). `test_limits` checks the rules below.
+
+- **Polling.** Write the body as a private template on the deadline type, called through `detail::with_deadline(params.time_limit, ...)` (`core/deadline.hpp`). Each loop opens its own `detail::Poller poll(deadline);`, whose stride adapts to that loop's units, and tests `detail::expired(poll)`. Without a limit, no poll is compiled.
+- **Grain.** Poll before each unit of work, preparation included (filling a table, building a cache). A unit spans about ten elementary operations at least, and 2n variant callbacks or O(n) distance evaluations at most.
+- **Stop.** Once expired, leave within n + 1 variant callbacks on the best complete tour (`feasible`), or else a valid partial one (`partial`): what a construction built, the prefix a search started from.
+- **Tolerance.** A call limited to T returns within T + 50 µs + one unit + the stop, preemption aside, while consecutive units cost within a factor of 2.
+- **Caches.** A stop can leave a cache that outlives the call half-built: the next call resumes it, so that a limit below its build time still progresses. Its invariant test compares every entry declared ready with a fresh computation, after an interrupted build, after its resumption and after `set_matrix`. A wrong entry only degrades a tour, which no other test sees.
+
 ### Step 1: Parameter struct
 
 In `core/solver.hpp`, add a parameter struct with sensible defaults:
@@ -139,6 +149,7 @@ In `core/solver.hpp`, add a parameter struct with sensible defaults:
 struct OrOptParams {
     std::size_t neighbors = 10;  // candidate list size per city (0 = all cities)
     std::size_t max_moves = 0;   // stop after this many applied moves (0 = no limit)
+    std::chrono::nanoseconds time_limit{0};  // stop after this much wall time (0 = no limit)
 };
 ```
 
@@ -191,6 +202,7 @@ auto Solver<Dist, Variant>::or_opt(OrOptParams params) -> Solver& {
     // Construction: evaluate_append(), append(), ctx_.init(), invoke_prepare().
     // Improvement: evaluate_replay() / accept_replay() to score and apply a
     //   rewrite of the current tour through the variant pipeline.
+    // Time limit: see Time limit support.
     // Set status_ to SolutionStatus::feasible for heuristics,
     //   SolutionStatus::optimal for exact solvers.
 }
@@ -211,7 +223,7 @@ In `periple/periple.hpp`:
 In `algorithms/registry.hpp`, add a descriptor struct and append it to the `AllAlgorithms` tuple:
 
 ```cpp
-struct AlgoNNOrOpt {
+struct AlgoNNOrOpt : Algorithm<AlgoNNOrOpt> {
     static constexpr const char* tag  = "OO";
     static constexpr const char* name = "nn_or_opt";
     static constexpr bool is_exact          = false;
@@ -219,17 +231,20 @@ struct AlgoNNOrOpt {
     static constexpr bool is_metaheuristic  = false;
     static constexpr int  max_tier          = 5;
 
+    // The tour or_opt improves, built outside its time limit.
     template <DistanceSource Dist, typename V>
-    void operator()(Solver<Dist, V>& s, unsigned = 0) const {
-        s.nearest_neighbor();
-        if (s.status() == SolutionStatus::feasible) s.or_opt();
+    void setup(Solver<Dist, V>& s) const { s.nearest_neighbor(); }
+
+    template <DistanceSource Dist, typename V>
+    void run(Solver<Dist, V>& s, const RunOptions& o) const {
+        if (s.status() == SolutionStatus::feasible) s.or_opt({.time_limit = o.time_limit});
     }
 };
 
 using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoNNTwoOpt, AlgoNNOrOpt>;
 ```
 
-The registry runs each entry on a fresh solver, so an improvement heuristic has to construct a tour first. Guard the improvement call: under a hard constraint the construction can stop early, leaving nothing to improve.
+`run` is the algorithm under test and forwards `RunOptions`. `setup` builds the tour an improvement algorithm starts from, since the registry runs each entry on a fresh solver. Guard `run`: under a hard constraint the construction can stop early, leaving nothing to improve.
 
 This enables the algorithm in the [automated tests](#automated-algorithm-tests) and the [benchmark runner](BENCHMARKING.md).
 
@@ -248,6 +263,7 @@ A PR adding an algorithm is complete when:
 
 - the [automated tests](#automated-algorithm-tests) pass in Debug and Release;
 - the algorithm follows [Variant and strategy support](#variant-and-strategy-support), and a new move type comes with everything listed in [Step 2](#step-2-define-move-types-only-if-needed);
+- the algorithm follows [Time limit support](#time-limit-support);
 - `tests/test_callbacks.cpp` has a protocol test using `LoggingCallbacks`: exact counts and order of `move_prepare` / `move_filter` on a small instance, for each move type the algorithm emits (see `protocol_held_karp_logging`);
 - [algorithm-specific tests](#algorithm-specific-tests) cover any behavior beyond the common contract;
 - removing the algorithm's `invoke_filter` calls, then its `invoke_prepare` calls, then its `ctx_.commit` calls makes at least one test fail each time. Check it once by hand and revert: it proves the tests see the variant;
@@ -375,6 +391,7 @@ tests/
         CMakeLists.txt
         test_algorithms.cpp
         test_variants.cpp
+        test_limits.cpp
         variant_registry.hpp
         test_two_opt.cpp
         test_held_karp_time_windows.cpp
@@ -382,10 +399,11 @@ tests/
 
 ### Automated algorithm tests
 
-Any algorithm registered in the [algorithm registry](#step-6-register-in-the-algorithm-registry) is tested automatically:
+Any algorithm registered in the [algorithm registry](#step-6-register-in-the-algorithm-registry) is tested automatically, its traits (`is_exact`, `symmetric_only`) narrowing or strengthening what is checked:
 
 - **`test_algorithms`**: valid tour (sizes 0 to 5), reported cost equal to a recomputation, the brute-force optimum for an exact algorithm and at least the optimum for a heuristic, on symmetric and asymmetric instances, a second run after `set_matrix`, and the [output invariants](#output-invariants) around every call.
 - **`test_variants`**: every shipped variant of `tests/algorithms/variant_registry.hpp`, against the brute-force optimum of the `AppendMove` pipeline; and oracles with a constrained optimum known by brute force, one per mechanism: a surcharge per edge (`move_prepare`), forbidden edges (`move_filter`), deadlines (a dimension).
+- **`test_limits`**: [Time limit support](#time-limit-support) under an expired limit and a short one, preparation included, then a second run on the stopped solver.
 
 Run a single algorithm's tests by passing its tag:
 
