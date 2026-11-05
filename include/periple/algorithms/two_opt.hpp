@@ -78,11 +78,11 @@ void Solver<Dist, Variant>::two_opt_run(const TwoOptParams& params, D& deadline)
 	                                               : std::numeric_limits<std::size_t>::max();
 	std::size_t moves = 0;
 
-	detail::Poller poll(deadline);  // not the build's: its units cost differently
-	while (!active.empty() && moves < max_moves && !detail::expired(poll)) {
+	detail::Poller stop(deadline);  // not the build's: its units cost differently
+	while (!active.empty() && moves < max_moves && !stop()) {
 		const city_type a = active.pop();
 		// Retried until no improving move remains, then deactivated.
-		while (moves < max_moves && two_opt_improve<Mode>(a, k, active, poll))
+		while (moves < max_moves && two_opt_improve<Mode>(a, k, active, stop))
 			++moves;
 		active.deactivate(a);
 	}
@@ -99,12 +99,12 @@ void Solver<Dist, Variant>::two_opt_run(const TwoOptParams& params, D& deadline)
 template <DistanceSource Dist, typename Variant>
 template <detail::LocalSearchMode Mode, typename P>
 auto Solver<Dist, Variant>::two_opt_improve(
-	city_type a, std::size_t k, detail::ActiveQueue<city_type>& active, P& poll) -> bool
+	city_type a, std::size_t k, detail::ActiveQueue<city_type>& active, P& stop) -> bool
 {
 	using detail::LocalSearchMode;
 	// One poll per call in the O(1) modes, one per candidate in replay (O(n) each).
 	if constexpr (Mode != LocalSearchMode::replay)
-		if (detail::expired(poll)) return false;
+		if (stop()) return false;
 
 	const std::size_t n = n_;
 	const auto& dist = *dist_;
@@ -206,7 +206,7 @@ auto Solver<Dist, Variant>::two_opt_improve(
 		// penalties (replay) can make a move improving whatever d(a, c) is.
 		for (city_type c : nbrs) {
 			if constexpr (Mode == LocalSearchMode::replay)
-				if (detail::expired(poll)) return false;
+				if (stop()) return false;
 			const std::size_t pc = pos_of(c);
 			if (pa >= pc) continue;  // edge a -> c: found when scanning from c
 			// Successor side: a = t[i], c = t[j].

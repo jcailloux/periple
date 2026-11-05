@@ -35,13 +35,13 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 	}
 
 	// The table gives no tour until it is complete: back to the start city.
-	auto stop = [this]() -> Solver& {
+	auto give_up = [this]() -> Solver& {
 		clear();
 		append(city_type{0});
 		return *this;
 	};
-	detail::Poller prepare(deadline);  // table allocation and fill
-	if (detail::expired(prepare)) return stop();
+	detail::Poller stop_fill(deadline);  // table allocation and fill
+	if (stop_fill()) return give_up();
 
 	constexpr auto INF = std::numeric_limits<cost_type>::max();
 
@@ -64,7 +64,7 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 
 	// Only sets containing city 0 (odd S) are ever read.
 	for (std::size_t S = 1; S < num_sets; S += 2) {
-		if (detail::expired(prepare)) return stop();
+		if (stop_fill()) return give_up();
 		std::fill_n(dp.begin() + static_cast<std::ptrdiff_t>(S * n_), n_, INF);
 	}
 
@@ -74,13 +74,13 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 	const auto& variant = variant_ref();
 
 	// Forward DP, polled apart: its units cost far more than the fill's.
-	detail::Poller forward(deadline);
+	detail::Poller stop_forward(deadline);
 	const std::size_t complement_mask = num_sets - 1;
 	for (std::size_t S = 1; S < num_sets; S += 2) { // S += 2: city 0 always in set
 		for (auto si = S; si; si &= si - 1) {
 			auto i = static_cast<std::size_t>(std::countr_zero(si));
 			if (dp[idx(S, i)] == INF) continue;
-			if (detail::expired(forward)) return stop();
+			if (stop_forward()) return give_up();
 
 			auto ci = static_cast<city_type>(i);
 

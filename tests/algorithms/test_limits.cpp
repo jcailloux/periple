@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <vector>
 
 using namespace periple;
@@ -66,12 +67,12 @@ bool proves_nothing(SolutionStatus status) {
 void test_deadline() {
 	detail::NoDeadline none;
 	detail::Poller unlimited(none);
-	assert(!detail::expired(unlimited) && "without a limit, nothing expires");
+	assert(!unlimited() && "without a limit, nothing expires");
 
 	detail::Deadline past(nanoseconds{1});
-	detail::Poller poll(past);
-	assert(detail::expired(poll) && "the first poll reads the clock");
-	assert(detail::expired(poll) && "an expired deadline stays expired");
+	detail::Poller stop(past);
+	assert(stop() && "the first poll reads the clock");
+	assert(stop() && "an expired deadline stays expired");
 
 	// Tight polling: never before the limit, and within the contract's 50 us
 	// after it on at least one run. A run preempted as the limit passes lags
@@ -83,12 +84,29 @@ void test_deadline() {
 		const auto start = steady_clock::now();
 		detail::Deadline soon(limit);
 		detail::Poller soon_poll(soon);
-		while (!detail::expired(soon_poll)) {}
+		while (!soon_poll()) {}
 		const auto elapsed = duration_cast<nanoseconds>(steady_clock::now() - start);
 		assert(elapsed >= limit && "a deadline never expires early");
 		best_lag = std::min(best_lag, elapsed - limit);
 	}
 	assert(best_lag < microseconds{50} && "a deadline is noticed within 50 us of tight polling");
+}
+
+// A strategy that runs long reads stop, and ends the construction with nullopt.
+struct WaitsForStop {
+	template <typename S, typename Stop>
+	auto select_next(const S&, Stop& stop) const -> std::optional<std::size_t> {
+		while (!stop()) {}
+		return std::nullopt;
+	}
+};
+
+void test_strategy_stop() {
+	auto dist = random_asym(6, 0x9E3779B97F4A7C15ull);
+	Solver s(dist);
+	run_checked(s, [&] { s.greedy_construct(WaitsForStop{}, {.time_limit = milliseconds{1}}); });
+	assert(s.status() == SolutionStatus::partial && s.tour().size() == 1
+		&& "a strategy stopped by the limit leaves what the construction built");
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +239,11 @@ int main() {
 	std::printf("deadline ... ");
 	std::fflush(stdout);
 	test_deadline();
+	std::printf("OK\n");
+
+	std::printf("strategy_stop ... ");
+	std::fflush(stdout);
+	test_strategy_stop();
 	std::printf("OK\n");
 
 	for_each_algorithm(nullptr, [](const auto& algo) {

@@ -12,6 +12,19 @@
 
 namespace periple {
 
+namespace detail {
+
+// A strategy that runs long takes stop as second argument.
+template <typename Strategy, typename S, typename Stop>
+auto select_next(Strategy& strategy, S& solver, Stop& stop) {
+	if constexpr (requires { strategy.select_next(solver, stop); })
+		return strategy.select_next(solver, stop);
+	else
+		return strategy.select_next(solver);
+}
+
+} // namespace detail
+
 // ---------------------------------------------------------------------------
 // Solver::greedy_construct
 // ---------------------------------------------------------------------------
@@ -54,9 +67,10 @@ auto Solver<Dist, Variant>::greedy_construct_run(
 		append(static_cast<city_type>(params.start_city));
 	}
 
-	detail::Poller poll(deadline);
-	while (n_ < total && !detail::expired(poll)) {
-		auto next = strategy.select_next(*this);
+	detail::Poller stop(deadline);
+	detail::Poller stop_strategy(deadline);  // not the loop's: its units cost differently
+	while (n_ < total && !stop()) {
+		auto next = detail::select_next(strategy, *this, stop_strategy);
 		if (!next) break;
 		append(*next);
 	}

@@ -186,7 +186,7 @@ struct FarthestSelector {
 solver.greedy_construct(FarthestSelector{});
 ```
 
-`time_limit` in `ConstructParams` applies between `select_next` calls: a call under way runs to its end.
+`time_limit` in `ConstructParams` applies between `select_next` calls. A strategy that runs long takes a second parameter, `select_next(solver, stop)`: `stop()` returns `true` once the limit has passed, and the strategy then returns `std::nullopt`.
 
 ### `NearestSelector`
 

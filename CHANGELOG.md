@@ -6,6 +6,7 @@
 
 - `time_limit` in the params of every algorithm: stopped early, it returns its best complete tour (`feasible`) or else a partial one (`partial`).
 - Benchmark runner: `--time-limit MS`.
+- `select_next(solver, stop)`: a construction strategy that runs long can honor `time_limit`.
 
 ### Breaking
 
