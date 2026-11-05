@@ -13,7 +13,10 @@ cmake --build .build/release
 .build/release/benchmarks/periple_bench --algo NN,HK     # multiple algorithms
 .build/release/benchmarks/periple_bench --help            # list available options and algorithm tags
 .build/release/benchmarks/periple_bench --output results.json
+.build/release/benchmarks/periple_bench --time-limit 100  # stop each run after 100 ms
 ```
+
+The limit leaves out the construction an improvement algorithm starts from, which the reported time includes. A run stopped on a partial tour counts as invalid and has no gap: `-` in the tables, `null` in the JSON.
 
 ## Instances
 

@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- `time_limit` in the params of every algorithm: stopped early, it returns its best complete tour (`feasible`) or else a partial one (`partial`).
+- Benchmark runner: `--time-limit MS`.
+
 ### Breaking
 
+- Registry descriptors derive from `Algorithm<Derived>` and define `run(solver, RunOptions)`, plus `setup(solver)` for an improvement algorithm; `operator()` takes `RunOptions` instead of a seed.
 - A variant with callbacks must handle `AppendMove`, and `held_karp` requires every variant component and dimension to handle `DPMove`. A variant that would be ignored now fails to compile instead.
 - `ctx.tour()` and `ctx.position()` fail an assert during a replay and during `held_karp`, where they used to return an empty span and an unrelated tour.
 - A dimension that commits state on `AppendMove` must provide staging (`begin_staging`, `discard_staging`, `save_staging`, `commit_staging`) to be used with `two_opt` or any replay, so that a rejected candidate leaves the committed tour's state intact.
