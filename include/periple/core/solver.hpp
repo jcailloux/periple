@@ -219,7 +219,7 @@ private:
 
 	template <detail::LocalSearchMode Mode, typename P>
 	auto two_opt_improve(city_type a, std::size_t k, detail::ActiveQueue<city_type>& active,
-	                     P& poll) -> bool;
+	                     P& stop) -> bool;
 
 	auto variant_ref() const -> const Variant& {
 		if constexpr (std::is_same_v<Variant, NoCallbacks>) {
@@ -563,9 +563,9 @@ auto Solver<Dist, Variant>::ensure_neighbors(std::size_t k, D& deadline) -> bool
 
 	std::vector<city_type> candidates(n - 1);
 
-	detail::Poller poll(deadline);
+	detail::Poller stop(deadline);
 	for (std::size_t i = neighbors_built_; i < n; ++i) {
-		if (detail::expired(poll)) {
+		if (stop()) {
 			neighbors_built_ = i;
 			return false;
 		}
