@@ -198,6 +198,7 @@ private:
 	void check_symmetry() const;
 	auto rebuild_and_cost(std::span<const city_type> t) -> cost_type;
 	void close_tour();
+	void resume_prefix(std::size_t k);
 
 	// Local search primitives (shared by improvement algorithms)
 	void ensure_path_costs();
@@ -618,6 +619,22 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 	}
 
 	return total_cost;
+}
+
+// --- resume_prefix ----------------------------------------------------------
+
+// Keeps tour[0..k) and rebuilds what derives from it: cost, dimensions, visited_.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::resume_prefix(std::size_t k) {
+	const auto total = dist_->size();
+	ensure_capacity(total);
+	n_ = k;
+	++tour_version_;
+	cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), k));
+	std::fill_n(visited_.data(), total, uint8_t{0});
+	for (std::size_t i = 0; i < k; ++i)
+		visited_[static_cast<std::size_t>(tour_[i])] = 1;
+	status_ = SolutionStatus::partial;
 }
 
 // --- close_tour -------------------------------------------------------------
