@@ -186,6 +186,8 @@ struct FarthestSelector {
 solver.greedy_construct(FarthestSelector{});
 ```
 
+`time_limit` in `ConstructParams` applies between `select_next` calls: a call under way runs to its end.
+
 ### `NearestSelector`
 
 Built-in strategy for `greedy_construct`. Iterates unvisited cities, calls `solver.evaluate_append()` (which runs the full variant pipeline: init -> prepare -> filter -> score), and picks the minimum. This is what `nearest_neighbor()` uses internally.
