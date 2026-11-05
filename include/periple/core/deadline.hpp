@@ -12,7 +12,6 @@ namespace periple::detail {
 class Deadline {
 public:
 	using Clock = std::chrono::steady_clock;
-	static constexpr bool timed = true;
 
 	explicit Deadline(std::chrono::nanoseconds limit)
 		: end_(Clock::now() + std::chrono::duration_cast<Clock::duration>(limit)) {}
@@ -24,9 +23,7 @@ private:
 };
 
 // No limit: nothing to poll.
-struct NoDeadline {
-	static constexpr bool timed = false;
-};
+struct NoDeadline {};
 
 // Polls a deadline once per unit of work of one loop, whose units cost about
 // the same. The clock is read at the first poll, then about every `interval`:
@@ -41,12 +38,11 @@ template <>
 class Poller<Deadline> {
 public:
 	using Clock = Deadline::Clock;
-	static constexpr bool timed = true;
 
 	explicit Poller(const Deadline& deadline) : end_(deadline.end()) {}
 
 	// True once the limit has passed, and on every later poll.
-	[[nodiscard]] bool expired() {
+	[[nodiscard]] bool operator()() {
 		if (expired_) return true;
 		if (--countdown_ > 0) return false;
 		const auto now = Clock::now();
@@ -72,24 +68,16 @@ private:
 	Clock::time_point end_;
 };
 
-// Having no expired() member, it fails to compile wherever a poll bypasses
-// detail::expired.
+// Never stops: this version of an algorithm holds no clock read.
 template <>
 class Poller<NoDeadline> {
 public:
-	static constexpr bool timed = false;
 	explicit Poller(const NoDeadline&) {}
+	[[nodiscard]] constexpr bool operator()() const { return false; }
 };
 
 template <typename D>
 Poller(const D&) -> Poller<D>;
-
-// The poll every algorithm writes: without a limit, no code is instantiated.
-template <typename P>
-[[nodiscard]] bool expired(P& poll) {
-	if constexpr (P::timed) return poll.expired();
-	else return false;
-}
 
 // Runs fn with a Deadline when a limit is set and with a NoDeadline otherwise:
 // the choice is made once per call, outside every loop.
