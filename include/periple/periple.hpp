@@ -18,3 +18,4 @@
 #include <periple/algorithms/nearest_neighbor.hpp>
 #include <periple/algorithms/held_karp.hpp>
 #include <periple/algorithms/two_opt.hpp>
+#include <periple/algorithms/branch_and_bound.hpp>

@@ -2,6 +2,7 @@
 
 #include <periple/core/dimensions.hpp>
 #include <periple/core/log.hpp>
+#include <periple/core/caches/bb_cache.hpp>
 #include <periple/core/caches/hk_cache.hpp>
 #include <periple/core/moves/two_opt_move.hpp>
 #include <periple/core/active_queue.hpp>
@@ -36,6 +37,13 @@ struct HeldKarpParams {
 struct ConstructParams {
 	std::size_t start_city = 0;
 	std::size_t resume_at = 0;
+	std::chrono::nanoseconds time_limit{0};  // stop after this much wall time (0 = no limit)
+};
+
+struct BranchAndBoundParams {
+	std::size_t start_city = 0;
+	std::size_t resume_at = 0;   // keep tour[0..resume_at) and search its completions (0 = start from start_city)
+	std::size_t max_nodes = 0;   // stop after this many explored nodes (0 = no limit)
 	std::chrono::nanoseconds time_limit{0};  // stop after this much wall time (0 = no limit)
 };
 
@@ -183,6 +191,12 @@ public:
 
 	auto two_opt(TwoOptParams params = {}) -> Solver&;
 
+	// Exact search, lower bound from symmetric() ? SpanningTreeBound : OutgoingEdgeBound.
+	auto branch_and_bound(BranchAndBoundParams params = {}) -> Solver&;
+
+	template <typename Bound>
+	auto branch_and_bound(Bound bound, BranchAndBoundParams params = {}) -> Solver&;
+
 #ifdef PERIPLE_TESTING
 	template <DistanceSource D, typename V> friend class SolverTestAccess;
 #endif
@@ -199,6 +213,7 @@ private:
 	auto rebuild_and_cost(std::span<const city_type> t) -> cost_type;
 	void close_tour();
 	void resume_prefix(std::size_t k);
+	void pop_back(cost_type prefix_cost);
 
 	// Local search primitives (shared by improvement algorithms)
 	void ensure_path_costs();
@@ -214,6 +229,9 @@ private:
 
 	template <typename D>
 	auto held_karp_run(D& deadline) -> Solver&;
+
+	template <typename Bound, typename D>
+	auto branch_and_bound_run(Bound& bound, const BranchAndBoundParams& params, D& deadline) -> Solver&;
 
 	template <detail::LocalSearchMode Mode, typename D>
 	void two_opt_run(const TwoOptParams& params, D& deadline);
@@ -265,6 +283,7 @@ private:
 
 	// Algorithm caches (lazy, one per algorithm that needs persistent state)
 	std::optional<HKCache<cost_type, city_type>> hk_cache_;
+	std::optional<BBCache<cost_type, city_type>> bb_cache_;
 };
 
 // ---------------------------------------------------------------------------
@@ -502,6 +521,7 @@ void Solver<Dist, Variant>::rebuild_path_costs(std::size_t from) {
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::invalidate_caches() {
 	if (hk_cache_) hk_cache_->reset();
+	if (bb_cache_) bb_cache_->reset();
 	neighbors_k_ = 0;
 	neighbors_built_ = 0;
 }
@@ -621,7 +641,7 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 	return total_cost;
 }
 
-// --- resume_prefix ----------------------------------------------------------
+// --- resume_prefix / pop_back ------------------------------------------------
 
 // Keeps tour[0..k) and rebuilds what derives from it: cost, dimensions, visited_.
 template <DistanceSource Dist, typename Variant>
@@ -635,6 +655,19 @@ void Solver<Dist, Variant>::resume_prefix(std::size_t k) {
 	for (std::size_t i = 0; i < k; ++i)
 		visited_[static_cast<std::size_t>(tour_[i])] = 1;
 	status_ = SolutionStatus::partial;
+}
+
+// Removes the last city and restores the cost of the shorter tour. Dimensions
+// need no undo: their state is committed per position, and the next append
+// overwrites the freed one.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::pop_back(cost_type prefix_cost) {
+	assert(n_ > 1 && "pop_back: the first city anchors the tour and stays");
+	--n_;
+	visited_[static_cast<std::size_t>(tour_[n_])] = 0;
+	cost_ = prefix_cost;
+	status_ = SolutionStatus::partial;
+	++tour_version_;
 }
 
 // --- close_tour -------------------------------------------------------------
