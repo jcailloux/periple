@@ -25,3 +25,10 @@ target_link_libraries(test_limits PRIVATE periple::periple)
 target_compile_definitions(test_limits PRIVATE PERIPLE_TESTING)
 target_include_directories(test_limits PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 add_test(NAME limits COMMAND test_limits)
+
+add_executable(test_branch_and_bound test_branch_and_bound.cpp)
+target_link_libraries(test_branch_and_bound PRIVATE periple::periple)
+target_compile_definitions(test_branch_and_bound PRIVATE PERIPLE_TESTING
+    PERIPLE_INSTANCES_DIR="${CMAKE_SOURCE_DIR}/benchmarks/instances")
+target_include_directories(test_branch_and_bound PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+add_test(NAME branch_and_bound COMMAND test_branch_and_bound)
