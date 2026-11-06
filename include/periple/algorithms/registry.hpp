@@ -4,6 +4,7 @@
 #include <periple/algorithms/nearest_neighbor.hpp>
 #include <periple/algorithms/held_karp.hpp>
 #include <periple/algorithms/two_opt.hpp>
+#include <periple/algorithms/branch_and_bound.hpp>
 
 #include <chrono>
 #include <cstdio>
@@ -78,8 +79,20 @@ struct AlgoNNTwoOpt : Algorithm<AlgoNNTwoOpt> {
 	}
 };
 
+struct AlgoBranchAndBound : Algorithm<AlgoBranchAndBound> {
+	static constexpr const char* tag  = "BB";
+	static constexpr const char* name = "branch_and_bound";
+	static constexpr bool is_exact          = true;
+	static constexpr bool symmetric_only    = false;
+	static constexpr bool is_metaheuristic  = false;
+	static constexpr int  max_tier          = 1;
+
+	template <DistanceSource Dist, typename V>
+	void run(Solver<Dist, V>& s, const RunOptions& o) const { s.branch_and_bound({.time_limit = o.time_limit}); }
+};
+
 // Master list -- add new algorithms here.
-using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoNNTwoOpt>;
+using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoNNTwoOpt, AlgoBranchAndBound>;
 
 // ---------------------------------------------------------------------------
 // Iteration helpers
