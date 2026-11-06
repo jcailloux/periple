@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -172,6 +173,48 @@ void test_protocol_held_karp_logging() {
 	}
 	for (std::size_t k = 2 * dp_moves; k < cb.log.size(); ++k)
 		assert(cb.log[k] == "move_prepare" && "rebuild_and_cost replays the tour through move_prepare alone");
+}
+
+// ---------------------------------------------------------------------------
+// Protocol: branch and bound extends tours through the construction pipeline
+// ---------------------------------------------------------------------------
+
+// Prunes nothing, so the search enumerates every tour and the log is exact.
+struct NoPruning {
+	template <typename Solver>
+	double lower_bound(const Solver&, double) const { return -std::numeric_limits<double>::infinity(); }
+};
+
+void test_protocol_branch_and_bound_logging() {
+	auto mat = make_mat4();
+	LoggingCallbacks cb;
+	Solver solver(mat, cb);
+	solver.branch_and_bound(NoPruning{});
+	assert(solver.status() == SolutionStatus::optimal && "LoggingCallbacks rejects nothing, so the search must succeed");
+	assert(solver.cost() == 80 && "the search must find the optimum of mat4");
+
+	// Children scored by evaluate_append: 3 at the root, 2 at each of the 3
+	// depth-2 nodes, 1 at each of the 6 depth-3 nodes. Every child is then
+	// appended: 3 + 6 + 6 appends, the last 6 closing the tour through the
+	// pipeline. Plus the start city, and the best tour rebuilt by set_tour
+	// (4 appends and the closing edge, move_prepare alone).
+	const std::size_t scored = 3 + 3 * 2 + 6 * 1, appended = 3 + 6 + 6, closed = 6;
+	std::size_t filter_count = 0, prepare_count = 0;
+	for (const auto& e : cb.log) {
+		if (e == "move_filter") ++filter_count;
+		else if (e == "move_prepare") ++prepare_count;
+		else assert(false && "branch_and_bound emits AppendMove only");
+	}
+	assert(filter_count == scored + closed && "expected one move_filter per scored child and per closing edge");
+	assert(prepare_count == 1 + scored + appended + closed + 5
+		&& "expected move_prepare for the start, each scored child, each append, each closing edge and the rebuild");
+
+	// The default bound prunes: fewer moves than the full enumeration.
+	LoggingCallbacks pruned;
+	Solver bounded(mat, pruned);
+	bounded.branch_and_bound();
+	assert(bounded.cost() == 80 && "the default bound must keep the optimum");
+	assert(pruned.log.size() < cb.log.size() && "the default bound must prune part of the tree");
 }
 
 // During construction the context exposes the placed prefix.
@@ -717,6 +760,7 @@ int main() {
 		{"protocol_reversal_replay",     test_protocol_reversal_replay},
 		{"protocol_two_opt_replay",      test_protocol_two_opt_replay},
 		{"protocol_held_karp_logging",   test_protocol_held_karp_logging},
+		{"protocol_branch_and_bound_logging", test_protocol_branch_and_bound_logging},
 		{"protocol_construction_sees_prefix", test_protocol_construction_sees_prefix},
 		// Unit - move_filter
 		{"move_filter_reject",           test_move_filter_reject},

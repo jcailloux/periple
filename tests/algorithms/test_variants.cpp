@@ -235,25 +235,6 @@ void run_relaxed_optional(const Dist& dist) {
 }
 
 // ---------------------------------------------------------------------------
-// An infeasible exact solve drops the tour, which must bump tour_version_
-// ---------------------------------------------------------------------------
-
-void run_infeasible_held_karp() {
-	auto dist = make_sym4();
-	// Zero-width windows: nothing but the depot is reachable in time.
-	std::vector<time_windows::TimeWindow> windows(dist.size(), {0.0, 0.0});
-	time_windows::Strict tw{std::span<const time_windows::TimeWindow>(windows)};
-	Solver solver(dist, tw);
-
-	std::vector<std::size_t> prefix = {0, 2};
-	solver.set_tour(prefix);
-	run_checked(solver, [&] { solver.held_karp(); });
-
-	assert(solver.status() == SolutionStatus::infeasible && "setup: no complete tour is feasible");
-	assert(solver.tour().empty() && "an infeasible exact solve drops the tour");
-}
-
-// ---------------------------------------------------------------------------
 // Oracle variants x all algorithms: constrained optimum known by brute force
 // ---------------------------------------------------------------------------
 
@@ -374,6 +355,43 @@ void run_oracles() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Exact algorithms prove infeasibility, and drop the tour
+// ---------------------------------------------------------------------------
+
+// No tour exists: city 2 cannot be entered, or nothing but the depot is
+// reachable in time. The solver holds a prefix, so dropping the tour must bump
+// tour_version_.
+template <typename Algo>
+void test_infeasible_exact(const Algo& algo) {
+	auto dist = make_sym4();
+	const std::size_t n = dist.size();
+	std::vector<std::uint8_t> banned(n * n, 0);
+	for (std::size_t a = 0; a < n; ++a) banned[a * n + 2] = 1;
+	ForbiddenEdges forbidden{&banned, n};
+	std::vector<time_windows::TimeWindow> windows(n, {0.0, 0.0});
+	time_windows::Strict closed{std::span<const time_windows::TimeWindow>(windows)};
+
+	auto check = [&](auto& solver) {
+		std::vector<std::size_t> prefix = {0, 3};
+		solver.set_tour(prefix);
+		run_checked(solver, [&] { algo(solver); });
+		assert(solver.status() == SolutionStatus::infeasible && "an exact algorithm must prove that no tour exists");
+		assert(solver.tour().empty() && "an infeasible exact solve drops the tour");
+	};
+	Solver s1(dist, forbidden);
+	check(s1);
+	Solver s2(dist, closed);
+	check(s2);
+}
+
+void run_infeasible_exact() {
+	for_each_algorithm(nullptr, [](const auto& algo) {
+		if constexpr (std::remove_cvref_t<decltype(algo)>::is_exact)
+			test_infeasible_exact(algo);
+	});
+}
+
 // Deadlines only (earliest = 0): no waiting, so arrival equals the distance
 // travelled and the cheapest state is also the earliest one. Exercises a
 // dimension (RouteTiming) whose state must propagate from move to move.
@@ -483,7 +501,7 @@ void test_shipped_variant(const Entry& entry, const Algo& algo, const DistanceMa
 		assert(*cost == s.cost() && "the reported cost must equal the AppendMove pipeline's");
 	}
 	if constexpr (Algo::is_exact) {
-		if constexpr (Entry::exact_optimal)
+		if constexpr (Entry::exact_optimal || !std::is_same_v<Algo, AlgoHeldKarp>)
 			assert((best ? s.status() == SolutionStatus::optimal && s.cost() == *best
 			             : s.status() == SolutionStatus::infeasible)
 				&& "an exact algorithm must reach the AppendMove pipeline's optimum, or report infeasible");
@@ -569,11 +587,6 @@ int main() {
 	run_relaxed_optional(make_sym4());
 	std::printf("OK\n");
 
-	std::printf("tsptw_infeasible_held_karp ... ");
-	std::fflush(stdout);
-	run_infeasible_held_karp();
-	std::printf("OK\n");
-
 	std::printf("variant_oracles ... ");
 	std::fflush(stdout);
 	run_oracles();
@@ -582,6 +595,11 @@ int main() {
 	std::printf("deadline_oracles ... ");
 	std::fflush(stdout);
 	run_deadline_oracles();
+	std::printf("OK\n");
+
+	std::printf("infeasible_exact ... ");
+	std::fflush(stdout);
+	run_infeasible_exact();
 	std::printf("OK\n");
 
 	std::printf("shipped_variants ... ");
