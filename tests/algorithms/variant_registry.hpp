@@ -64,8 +64,9 @@ inline std::vector<double> make_service(Instance& in) {
 	return service;
 }
 
-// exact_optimal: an exact algorithm must reach the brute-force optimum. False
-// only for a known issue listed in CHANGELOG.md.
+// exact_optimal: held_karp must reach the brute-force optimum. False only for
+// a known held_karp issue listed in CHANGELOG.md; other exact algorithms must
+// reach it regardless.
 
 struct StrictDeadlines {
 	static constexpr const char* name = "strict_deadlines";
