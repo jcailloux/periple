@@ -122,6 +122,15 @@ auto atsp_cost = jv.atsp_cost(solver.cost());    // recover original cost
 
 The transformation roughly quadruples solving time (2N cities instead of N) and may degrade heuristic solution quality. It is the standard approach used by LKH.
 
+It also gives `branch_and_bound` its strong bound, the way to solve an asymmetric instance without a variant beyond about 20 cities: 25 ms at 24 cities, where `held_karp` takes 4 s:
+
+```cpp
+periple::Solver solver(jv);
+solver.set_symmetric(true);
+solver.branch_and_bound();
+auto atsp_tour = jv.atsp_tour(solver.tour());
+```
+
 ## Custom distance source
 
 Any type satisfying the `DistanceSource` concept works with the `Solver`:
