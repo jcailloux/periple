@@ -6,7 +6,6 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
-#include <limits>
 #include <vector>
 
 // Recompute the ATSP tour cost from a city sequence.
@@ -40,19 +39,17 @@ void test_distance_values() {
 	assert(jv.original_size() == 3);
 	assert(jv.big_m() == 31);
 
-	constexpr auto INF = std::numeric_limits<int>::max();
-
 	// Diagonal
 	for (std::size_t i = 0; i < 6; ++i)
 		assert(jv(i, i) == 0);
 
-	// Same-class edges: infinity
-	assert(jv(0, 1) == INF);
-	assert(jv(0, 2) == INF);
-	assert(jv(1, 2) == INF);
-	assert(jv(3, 4) == INF);
-	assert(jv(3, 5) == INF);
-	assert(jv(4, 5) == INF);
+	// Same-class edges: forbidden, at big_m
+	assert(jv(0, 1) == 31);
+	assert(jv(0, 2) == 31);
+	assert(jv(1, 2) == 31);
+	assert(jv(3, 4) == 31);
+	assert(jv(3, 5) == 31);
+	assert(jv(4, 5) == 31);
 
 	// Self-pairing: -M
 	assert(jv(0, 3) == -31);

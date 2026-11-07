@@ -147,6 +147,19 @@ void test_jonker_volgenant_view() {
 		assert(solver.status() == SolutionStatus::optimal && "the view must be solved");
 		assert(jv.atsp_cost(solver.cost()) == exact.cost() && "SpanningTreeBound must hold with negative weights");
 	}
+	// Forbidden edges must leave the cost usable: an overflow stops the pruning.
+	for (std::size_t n = 7; n <= 14; ++n) {
+		auto asym = random_asym(rng, n, 1000);
+		Solver exact(asym);
+		exact.held_karp();
+
+		auto jv = jonker_volgenant(asym);
+		Solver solver(jv);
+		solver.set_symmetric(true);
+		solver.branch_and_bound({.max_nodes = 1000000});
+		assert(solver.status() == SolutionStatus::optimal && "a forbidden edge must prune its branch");
+		assert(jv.atsp_cost(solver.cost()) == exact.cost() && "the view must reach the optimum");
+	}
 }
 
 // Floating-point costs: the bound's rounding margin keeps the optimum.

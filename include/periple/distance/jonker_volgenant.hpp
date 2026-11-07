@@ -8,7 +8,6 @@
 
 #include <cassert>
 #include <cstddef>
-#include <limits>
 #include <span>
 #include <vector>
 
@@ -42,8 +41,10 @@ public:
 		bool j_ghost = j >= n_;
 
 		// Same class (both real or both ghost) -- includes diagonal (i == j).
+		// A forbidden edge costs big_m: a cycle takes at least two of them,
+		// which outweighs every ATSP edge it avoids.
 		if (i_ghost == j_ghost)
-			return i == j ? cost_type{} : inf();
+			return i == j ? cost_type{} : big_m_;
 
 		// Cross-class: normalize to (real, ghost_origin).
 		std::size_t r = i_ghost ? j : i;
@@ -110,13 +111,6 @@ public:
 	}
 
 private:
-	static constexpr cost_type inf() {
-		if constexpr (std::numeric_limits<cost_type>::has_infinity)
-			return std::numeric_limits<cost_type>::infinity();
-		else
-			return std::numeric_limits<cost_type>::max();
-	}
-
 	// Debug-only: verify that the tour alternates real and ghost cities.
 	[[nodiscard]] bool verify_alternation(
 		std::span<const city_type> sym) const {
