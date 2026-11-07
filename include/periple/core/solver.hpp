@@ -191,7 +191,7 @@ public:
 
 	auto two_opt(TwoOptParams params = {}) -> Solver&;
 
-	// Exact search, lower bound from symmetric() ? SpanningTreeBound : OutgoingEdgeBound.
+	// Exact search, lower bound from symmetric() ? SpanningTreeBound : SpanningArborescenceBound.
 	auto branch_and_bound(BranchAndBoundParams params = {}) -> Solver&;
 
 	template <typename Bound>
