@@ -81,7 +81,8 @@ auto pipeline_optimum(const Dist& dist, const Variant& variant, std::vector<std:
 // Default bounds against held_karp
 // ---------------------------------------------------------------------------
 
-// Both default bounds, with and without a tour to beat, n = 3..9.
+// Both default bounds, with and without a tour to beat, n = 3..9; the
+// asymmetric one holds on symmetric instances too.
 void test_default_bounds_match_held_karp() {
 	Rng rng{0x9E3779B97F4A7C15ull};
 	for (std::size_t n = 3; n <= 9; ++n) {
@@ -104,13 +105,129 @@ void test_default_bounds_match_held_karp() {
 				&& "a held tour must only speed the search up");
 			assert(warm.tour()[0] == 0 && "the result starts at start_city, even from a rotated held tour");
 
+			Solver mirror(sym);
+			mirror.nearest_neighbor().two_opt();
+			run_checked(mirror, [&] { mirror.branch_and_bound(SpanningArborescenceBound{}); });
+			assert(mirror.status() == SolutionStatus::optimal && mirror.cost() == exact.cost()
+				&& "SpanningArborescenceBound must keep the optimum of a symmetric instance");
+
 			auto asym = random_asym(rng, n, 100);
 			Solver exact_asym(asym);
 			exact_asym.held_karp();
 			Solver bb(asym);
 			run_checked(bb, [&] { bb.branch_and_bound(); });
 			assert(bb.status() == SolutionStatus::optimal && bb.cost() == exact_asym.cost()
-				&& "OutgoingEdgeBound must keep the optimum");
+				&& "SpanningArborescenceBound must keep the optimum");
+
+			Solver warm_asym(asym);
+			warm_asym.nearest_neighbor().two_opt();
+			run_checked(warm_asym, [&] { warm_asym.branch_and_bound(); });
+			assert(warm_asym.status() == SolutionStatus::optimal && warm_asym.cost() == exact_asym.cost()
+				&& "SpanningArborescenceBound must keep the optimum below a held tour");
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bounds at a node, against enumeration
+// ---------------------------------------------------------------------------
+
+// Cheapest arborescence over last, the cities off the prefix and first, rooted
+// at last, by enumeration of each node's parent: first leaves nothing, and last
+// never goes straight to first while a city remains between them.
+int min_arborescence(const DistanceMatrix<int>& dist, const std::vector<std::size_t>& prefix) {
+	std::vector<std::size_t> nodes{prefix.back()};
+	for (std::size_t c = 0; c < dist.size(); ++c)
+		if (std::find(prefix.begin(), prefix.end(), c) == prefix.end()) nodes.push_back(c);
+	nodes.push_back(prefix.front());
+	const std::size_t m = nodes.size(), end = m - 1;
+	auto allowed = [&](std::size_t a, std::size_t b) { return a != b && a != end && !(a == 0 && b == end); };
+	std::vector<std::size_t> parent(m, 0);
+	int best = std::numeric_limits<int>::max();
+	for (;;) {
+		bool ok = true;
+		for (std::size_t b = 1; b < m && ok; ++b) ok = allowed(parent[b], b);
+		for (std::size_t b = 1; b < m && ok; ++b) {
+			std::size_t u = b, steps = 0;
+			while (u != 0 && steps < m) { u = parent[u]; ++steps; }
+			ok = u == 0;
+		}
+		if (ok) {
+			int cost = 0;
+			for (std::size_t b = 1; b < m; ++b) cost += dist(nodes[parent[b]], nodes[b]);
+			best = std::min(best, cost);
+		}
+		std::size_t b = 1;
+		while (b < m && ++parent[b] == end) parent[b++] = 0;
+		if (b == m) break;
+	}
+	return best;
+}
+
+// Without ascent, the arborescence is the minimum one. Small costs give ties and
+// cycles, hence contractions; up to 7 nodes.
+void test_arborescence_is_minimum() {
+	Rng rng{0x428A2F98D728AE22ull};
+	auto never = [] { return false; };
+	for (const int hi : {5, 1000}) {
+		for (std::size_t n = 3; n <= 7; ++n) {
+			for (int seed = 0; seed < 40; ++seed) {
+				auto dist = random_asym(rng, n, hi);
+				std::vector<std::size_t> order(n);
+				std::iota(order.begin(), order.end(), std::size_t{0});
+				for (std::size_t i = n - 1; i > 0; --i)
+					std::swap(order[i], order[static_cast<std::size_t>(rng.below(static_cast<int>(i) + 1))]);
+				const std::size_t len = 2 + static_cast<std::size_t>(rng.below(static_cast<int>(n) - 2));
+				const std::vector<std::size_t> prefix(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(len));
+
+				Solver solver(dist);
+				for (std::size_t i = 0; i + 1 < len; ++i) solver.append(prefix[i]);
+				SpanningArborescenceBound bound;
+				bound.iterations = 0;
+				bound.begin(solver);
+				solver.append(prefix.back());
+				const double value = bound.lower_bound(solver, 1e18, never);
+				assert(value == min_arborescence(dist, prefix)
+					&& "SpanningArborescenceBound without ascent must return the minimum arborescence");
+			}
+		}
+	}
+}
+
+// Along a chain of depths, each node ascending from its parent's weights toward
+// a cutoff around the optimal completion, a bound never exceeds that completion.
+template <typename Dist, typename Bound>
+void check_below_completion(const Dist& dist, Bound bound, bool symmetric, Rng& rng) {
+	auto never = [] { return false; };
+	const std::size_t n = dist.size();
+	std::vector<std::size_t> order(n);
+	std::iota(order.begin(), order.end(), std::size_t{0});
+	for (std::size_t i = n - 1; i > 1; --i)
+		std::swap(order[i], order[1 + static_cast<std::size_t>(rng.below(static_cast<int>(i)))]);
+	Solver solver(dist);
+	if (symmetric) solver.set_symmetric(true);
+	solver.append(order[0]);
+	bound.begin(solver);
+	for (std::size_t d = 1; d + 1 < n; ++d) {
+		solver.append(order[d]);
+		const std::vector<std::size_t> prefix(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(d + 1));
+		const double completion = static_cast<double>(*pipeline_optimum(dist, NoCallbacks{}, prefix) - solver.cost());
+		const double cutoff = completion * (0.5 + rng.below(101) / 100.0);
+		assert(bound.lower_bound(solver, cutoff, never) <= completion
+			&& "a lower bound must not exceed the cheapest completion");
+	}
+}
+
+void test_bounds_below_completion() {
+	Rng rng{0x7137449123EF65CDull};
+	for (const int hi : {5, 1000}) {
+		for (std::size_t n = 4; n <= 8; ++n) {
+			for (int seed = 0; seed < 10; ++seed) {
+				check_below_completion(random_asym(rng, n, hi), SpanningArborescenceBound{}, false, rng);
+				auto sym = random_sym(rng, n, hi);
+				check_below_completion(sym, SpanningArborescenceBound{}, false, rng);
+				check_below_completion(sym, SpanningTreeBound{}, true, rng);
+			}
 		}
 	}
 }
@@ -183,7 +300,7 @@ void test_double_costs() {
 }
 
 // ---------------------------------------------------------------------------
-// Variants under SpanningTreeBound (test_variants runs OutgoingEdgeBound)
+// Variants under both default bounds (test_variants runs SpanningArborescenceBound)
 // ---------------------------------------------------------------------------
 
 void test_symmetric_relaxed_windows() {
@@ -202,6 +319,35 @@ void test_symmetric_relaxed_windows() {
 			const auto best = pipeline_optimum(sym, variant, {0});
 			assert(solver.status() == SolutionStatus::optimal && solver.cost() == *best
 				&& "branch_and_bound must minimize penalties, waiting included");
+		}
+	}
+}
+
+// Strict windows leave some instances without a tour.
+void test_asymmetric_windows() {
+	Rng rng{0x5BE0CD19137E2179ull};
+	for (std::size_t n = 3; n <= 7; ++n) {
+		for (int seed = 0; seed < 10; ++seed) {
+			auto asym = random_asym(rng, n, 30);
+			std::vector<time_windows::TimeWindow> windows(n);
+			windows[0] = {0.0, 1e9};
+			for (std::size_t c = 1; c < n; ++c)
+				windows[c] = {static_cast<double>(rng.below(40)), static_cast<double>(20 + rng.below(80))};
+
+			time_windows::Relaxed relaxed(windows, 10);
+			Solver soft(asym, relaxed);
+			run_checked(soft, [&] { soft.branch_and_bound(); });
+			const auto soft_best = pipeline_optimum(asym, relaxed, {0});
+			assert(soft.status() == SolutionStatus::optimal && soft.cost() == *soft_best
+				&& "SpanningArborescenceBound must keep the optimum under penalties");
+
+			time_windows::Strict strict(windows);
+			Solver hard(asym, strict);
+			run_checked(hard, [&] { hard.branch_and_bound(); });
+			const auto hard_best = pipeline_optimum(asym, strict, {0});
+			assert((hard_best ? hard.status() == SolutionStatus::optimal && hard.cost() == *hard_best
+			                  : hard.status() == SolutionStatus::infeasible)
+				&& "SpanningArborescenceBound must keep the optimum under deadlines, or prove there is none");
 		}
 	}
 }
@@ -347,17 +493,20 @@ void test_limit_stops_the_bound() {
 	auto dist = random_sym(rng, 500, 1000);
 	constexpr auto limit = milliseconds{1};
 	constexpr auto allowed = limit + milliseconds{4};
-	SpanningTreeBound long_ascent;
-	long_ascent.iterations = 1000;  // a bound that ignores stop overruns by far
+	// Bounds that ignored stop would overrun by far.
+	SpanningTreeBound long_tree;
+	long_tree.iterations = 1000;
+	SpanningArborescenceBound long_arborescence;
+	long_arborescence.iterations = 1000;
 	for (const bool symmetric : {false, true}) {
 		auto best = nanoseconds::max();
 		for (int run = 0; run < 20 && best >= allowed; ++run) {
 			Solver solver(dist);
 			solver.set_symmetric(symmetric, unchecked);
-			solver.nearest_neighbor();  // a finite cutoff: SpanningTreeBound ascends
+			solver.nearest_neighbor();  // a finite cutoff: both bounds ascend
 			const auto start = steady_clock::now();
-			if (symmetric) solver.branch_and_bound(long_ascent, {.time_limit = limit});
-			else solver.branch_and_bound({.time_limit = limit});
+			if (symmetric) solver.branch_and_bound(long_tree, {.time_limit = limit});
+			else solver.branch_and_bound(long_arborescence, {.time_limit = limit});
 			best = std::min(best, duration_cast<nanoseconds>(steady_clock::now() - start));
 			assert(solver.status() == SolutionStatus::feasible && "stopped early, the search returns the held tour or a better one");
 		}
@@ -440,10 +589,13 @@ int main() {
 	struct Test { const char* name; void (*fn)(); };
 	Test tests[] = {
 		{"default_bounds_match_held_karp", test_default_bounds_match_held_karp},
+		{"arborescence_is_minimum",        test_arborescence_is_minimum},
+		{"bounds_below_completion",        test_bounds_below_completion},
 		{"tsplib_optima",                  test_tsplib_optima},
 		{"jonker_volgenant_view",          test_jonker_volgenant_view},
 		{"double_costs",                   test_double_costs},
 		{"symmetric_relaxed_windows",      test_symmetric_relaxed_windows},
+		{"asymmetric_windows",             test_asymmetric_windows},
 		{"unstaged_dimension",             test_unstaged_dimension},
 		{"held_tour_bounds_the_search",    test_held_tour_bounds_the_search},
 		{"held_tour_rotated",              test_held_tour_rotated},
