@@ -28,7 +28,7 @@ Service times do not affect the tour cost directly (cost is based on travel dist
 Each city has one or more time windows `{earliest, latest}`. A vehicle arriving before `earliest` waits; arriving after `latest` is a violation.
 
 > [!WARNING]
-> Under `Relaxed`, or `Strict` with windows that force waiting (`earliest > 0`), `held_karp` may return a costlier tour as `optimal`; under `Strict` with waiting, it may also report `infeasible` for a feasible instance. See the known issues in CHANGELOG.md.
+> Under `Relaxed`, or `Strict` with windows that force waiting (`earliest > 0`), `held_karp` may return a costlier tour as `optimal`; under `Strict` with waiting, it may also report `infeasible` for a feasible instance. See the known issues in CHANGELOG.md. `branch_and_bound` is exact under all of them, and much faster with `set_symmetric(true)` on symmetric distances.
 
 ### TimeWindow
 
@@ -192,22 +192,22 @@ struct MyTimeConstraint {
 };
 ```
 
-### Variant supporting both constructive and exact algorithms
+### Variant supporting `held_karp`
 
-Provide overloads for both `AppendMove` and `DPMove`:
+Provide `DPMove` overloads next to the `AppendMove` ones:
 
 ```cpp
 struct MyVariant {
     using dimension = periple::RouteTiming;
 
-    // Constructive algorithms
+    // Every algorithm but held_karp
     template <typename CityT, typename Ctx>
     void move_prepare(const periple::AppendMove<CityT>& m, Ctx& ctx) const { /* ... */ }
 
     template <typename CityT, typename Ctx>
     bool move_filter(const periple::AppendMove<CityT>& m, const Ctx& ctx) const { /* ... */ }
 
-    // Exact algorithms (Held-Karp)
+    // held_karp
     template <typename CityT, typename Ctx>
     void move_prepare(const periple::DPMove<CityT>& m, Ctx& ctx) const { /* ... */ }
 
@@ -231,7 +231,7 @@ concept Dimension = requires(T& t, std::size_t n) {
 Additionally, a dimension should provide (detected by overload resolution, not the concept):
 
 - `init(Move, Dist)` or `init(Move, Dist, Ctx)` -- initialize tentative state from the committed state of the previous position, found at `m.pos - 1` for an `AppendMove`. The 3-param form also receives the context: the dimensions initialized before this one and, during construction, `ctx.tour()` and `ctx.position()`.
-- `commit(Move)` -- write tentative state to committed storage.
+- `commit(Move)` -- write tentative state to committed storage, one slot per position: `branch_and_bound` backtracks by letting the next append overwrite the freed slot.
 - `begin_staging(from)`, `discard_staging()`, `save_staging(to)`, `commit_staging(to)` -- required if the dimension commits state on `AppendMove`: a replay (`two_opt`) evaluates candidates without overwriting the committed tour. Store committed values in a `periple::StagedVector` and forward these calls to it, as `RouteTiming` does.
 - `snapshot(Move) -> SnapshotType` and `restore(SnapshotType)` -- save and restore tentative state for constructive algorithms (evaluate/snapshot/restore pattern).
 
@@ -299,7 +299,7 @@ struct CapacityConstraint {
 };
 ```
 
-This pair supports construction and local search. `DPMove` overloads, as in `RouteTiming`, extend it to `held_karp`.
+This pair supports construction, local search and `branch_and_bound`. `DPMove` overloads, as in `RouteTiming`, extend it to `held_karp`.
 
 Or combine dimensions:
 

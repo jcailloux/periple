@@ -151,8 +151,9 @@ Customize algorithm behavior without modifying internal logic. Variant callbacks
 #include <periple/variants/time_windows.hpp>
 
 // TSPTW: reject moves that violate time windows
-periple::time_windows::Strict tw(dist, windows);
-solver.nearest_neighbor(tw);
+periple::time_windows::Strict tw(windows);
+periple::Solver constrained(dist, tw);
+constrained.nearest_neighbor();
 
 // Custom construction strategy
 solver.greedy_construct(MyStrategy{});
@@ -165,12 +166,33 @@ See [CALLBACKS.md](CALLBACKS.md) for the callback architecture and [VARIANTS.md]
 | Algorithm | Category | Complexity | ATSP support |
 |-----------|----------|------------|--------------|
 | Nearest neighbor | Construction | O(n^2) | full |
-| Held-Karp | Exact | O(n^2 * 2^n) | full |
+| Held-Karp | Exact | O(n^2 * 2^n), n <= 25 | full |
+| Branch and bound | Exact | exponential worst case, O(n^2) per node | adapted |
 | 2-opt | Improvement | O(n * k) per pass | adapted |
 
 ATSP support: **full** = native asymmetric support, **adapted** = supported with different characteristics, **not yet** = symmetric only (use `jonker_volgenant()` to wrap your matrix).
 
 2-opt on an asymmetric instance only considers segments that do not wrap around the tour start, since reversing a segment changes the direction of the edges inside it. Those inner edges also change cost, which the don't-look bits do not track, so a further `two_opt()` call may still improve the tour.
+
+### Choosing an exact solver
+
+`branch_and_bound` has no size limit and is exact under every variant with non-negative penalties. Its speed depends on its bound, so declare what holds:
+
+| Distances | Call | Measured on one core of an i5-13500 |
+|---|---|---|
+| Symmetric | `set_symmetric(true)`, then `branch_and_bound()` | Tier 1 within 3 ms, st70 in 1.7 s, kroB100 in 31 s, kroA100 unproved after 60 s |
+| Symmetric, with a variant | same | Under time windows, most instances of 20 to 40 cities within seconds; tight windows can take far longer |
+| Asymmetric | [`jonker_volgenant()`](DISTANCE_SOURCES.md#asymmetric-tsp-jonker-volgenant), then as above | Up to 20 s at 50 cities |
+| Asymmetric, with a variant | `held_karp()` up to 25 cities, `branch_and_bound()` beyond or [under time windows](VARIANTS.md#time-windows-tsptw) | `held_karp()`: 4 s at 24 cities. `branch_and_bound()` has a weak bound here: 50 ms to over 20 s around 20 cities, before any variant |
+
+A complete tour held by the solver is the first tour to beat, which cuts the search time by 13 to 62% on the Tier 2 instances proved:
+
+```cpp
+solver.set_symmetric(true);
+solver.nearest_neighbor().two_opt().branch_and_bound({.time_limit = std::chrono::seconds(10)});
+```
+
+Stopped early, it returns that tour or a better one: within 10 s, 8 of the 9 Tier 2 instances end proved or improved. See [CALLBACKS.md](CALLBACKS.md#branch_and_bound) for the statuses, `resume_at` and custom bounds.
 
 ### Generic frameworks
 
@@ -179,6 +201,7 @@ These are building blocks that require a user-supplied strategy. Complexity and 
 | Framework | Category | Complexity with O(1) strategy |
 |-----------|----------|-------------------------------|
 | Greedy construct | Construction | O(n) |
+| Branch and bound | Exact | exponential worst case, O(n log n) per node |
 
 > [!WARNING]
 > Per-move variant callbacks defined for an ATSP instance are not compatible with the symmetric problem obtained via `jonker_volgenant()`.
@@ -281,11 +304,11 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 | Method | Description |
 |--------|-------------|
 | `Solver(dist)` | Create a solver bound to a distance source (template deduced) |
-| `Solver(dist, tour_cost)` | Create with a custom tour cost function |
+| `Solver(dist, variant)` | Create with variant callbacks; the variant must outlive the solver |
 | `Solver()` | Create an empty solver (requires explicit template parameter) |
 | `set_matrix(dist)` | Bind (or rebind) to a distance source, clearing any solution |
-| `set_tour_cost(tc)` | Set or change the tour cost function |
-| `set_symmetric(bool)` | Declare whether the problem is symmetric (default: `false`). Checked in debug |
+| `set_variant(v)` | Set or change the variant |
+| `set_symmetric(bool)` | Declare whether the distances are symmetric (default: `false`). Checked in debug |
 | `set_symmetric(bool, unchecked)` | Same, but skips the debug symmetry check on the distance matrix |
 | `clear()` | Clear the current solution, keep the distance source |
 | `reset()` | Reset to default-constructed state |
@@ -294,11 +317,11 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `status()` | `SolutionStatus` | `none`, `partial`, `feasible`, or `optimal` |
+| `status()` | `SolutionStatus` | `none`, `partial`, `feasible`, `optimal`, or `infeasible` |
 | `tour()` | `span<const city_type>` | Zero-copy view of the current tour |
 | `cost()` | `cost_type` | Cost of the current tour |
 | `size()` | `std::size_t` | Number of cities |
-| `symmetric()` | `bool` | Whether the problem is declared symmetric |
+| `symmetric()` | `bool` | Whether the distances are declared symmetric |
 | `set_tour(span)` | `void` | Inject a tour (full or partial prefix) |
 | `rotate_to_front(city)` | `void` | Rotate a complete tour so `city` comes first, at equal cost |
 
@@ -309,12 +332,11 @@ All algorithm methods return `Solver&` for chaining.
 | Method | Description |
 |--------|-------------|
 | `nearest_neighbor(params)` | Construction heuristic |
-| `nearest_neighbor(variant, params)` | With variant callbacks |
 | `two_opt(params)` | 2-opt local search (`neighbors`: candidate list size, `max_moves`, `time_limit`) |
-| `held_karp(params)` | Exact solver |
-| `held_karp(variant, params)` | With variant callbacks (`DPMove`: filter, eval, on_improve) |
+| `held_karp(params)` | Exact solver, up to 25 cities |
+| `branch_and_bound(params)` | Exact search with the default bound (`start_city`, `resume_at`, `max_nodes`, `time_limit`) |
+| `branch_and_bound(bound, params)` | Same with your own lower bound |
 | `greedy_construct(strategy, params)` | Generic construction framework |
-| `greedy_construct(strategy, variant, params)` | With variant callbacks forwarded to strategy |
 
 </details>
 

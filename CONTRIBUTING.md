@@ -43,6 +43,7 @@ Key Solver methods:
 - **`append(city)`** -- runs init + prepare, applies the move (places city, updates cost), commits dimension state.
 - **`rebuild_and_cost(tour)`** -- replays a complete tour through the pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. Used by `set_tour`, `resume_at`, `clear`.
 - **`close_tour()`** -- adds the return-to-start edge cost for complete tours.
+- **`pop_back(prefix_cost)`** -- undoes the last `append`: frees the city and restores the given cost. Dimensions need no undo, the next `append` overwrites the freed position.
 - **`evaluate_replay(city_at, from, prefix)`** / **`evaluate_reversal(i, j)`** -- score a rewrite of an existing tour by replaying the changed suffix through the pipeline. Used by local search, see [CALLBACKS.md](CALLBACKS.md).
 
 ### EvalContext
@@ -79,7 +80,7 @@ auto Solver<Dist, Variant>::nearest_neighbor(NearestNeighborParams params) -> So
 
 `greedy_construct` handles the generic loop: start city, repeated `strategy.select_next(solver)` + `append`, termination on `nullopt`.
 
-Exact algorithms (Held-Karp) use the pipeline directly with `DPMove`.
+`held_karp` uses the pipeline directly with `DPMove`. `branch_and_bound` extends and backtracks through `evaluate_append`, `append` and `pop_back`, and takes its lower bound as a strategy; `branch_and_bound()` picks a built-in one.
 
 > [!IMPORTANT]
 > `position_` is the inverse index of `tour_` and `visited_` its membership set. Both are invariants: every primitive that writes `tour_` maintains them, so an algorithm never refreshes them. Write the tour through those primitives rather than touching `tour_` directly.
@@ -92,11 +93,11 @@ Exact algorithms (Held-Karp) use the pipeline directly with `DPMove`.
 | Matrix-derived | `neighbors_`, `hk_cache_` | lazy, persistent, invalidated by `set_matrix` |
 | Tour-derived, versioned | `path_fwd_`/`path_bwd_` | lazy via `ensure_path_costs()`, validated against `tour_version_`, maintained incrementally by `rebuild_path_costs(from)` during a run |
 | Dimensions | `RouteTiming`, `CumulativeCost` | declared by variants, maintained eagerly by the pipeline |
-| Algorithm workspace | `dont_look_`, `queue_` | refreshed on entry by the algorithm that uses them, maintained during its run, never read afterwards |
+| Algorithm workspace | `dont_look_`, `queue_`, `bb_cache_` | refreshed on entry by the algorithm that uses them, maintained during its run, never read afterwards |
 
 Three rules follow:
 
-- Every write to `tour_` or `n_` increments `tour_version_`. Write through the existing primitives (`append`, `set_tour`, `accept_replay`, `accept_reversal`, `reverse_range`, `reverse_cyclic`), which do it for you; an algorithm that fills the tour itself, as `held_karp` does, increments it itself. A cache derived from the tour compares its own version against it, so a missing increment leaves that cache marked valid for a tour it no longer describes.
+- Every write to `tour_` or `n_` increments `tour_version_`. Write through the existing primitives (`append`, `pop_back`, `set_tour`, `accept_replay`, `accept_reversal`, `reverse_range`, `reverse_cyclic`), which do it for you; an algorithm that fills the tour itself, as `held_karp` does, increments it itself. A cache derived from the tour compares its own version against it, so a missing increment leaves that cache marked valid for a tour it no longer describes.
 - An algorithm never reads a workspace buffer it did not refresh in the same call.
 - Public accessors never expose the workspace category.
 
@@ -128,7 +129,7 @@ Every algorithm honors every TSP variant:
 
 - **Variant callbacks.** Every move the algorithm evaluates or applies goes through the variant pipeline: `ctx_.init`, `invoke_prepare`, `invoke_filter`, then `ctx_.commit` for an applied move. The primitives `evaluate_append` / `append`, `evaluate_replay` / `accept_replay` and `evaluate_reversal` / `accept_reversal` do this for you. With a variant set, every decision and every cost comes from the pipeline. Callbacks read `ctx.tour()` and `ctx.position()` during construction only.
 - **Move types.** Prefer an existing move type, see [Step 2](#step-2-define-move-types-only-if-needed). `Solver` checks `AppendMove` coverage itself, and `evaluate_replay` checks staging. For each other move type the algorithm emits, add the `static_assert`s that the variant and its dimensions handle it, as `held_karp` does for `DPMove`.
-- **Strategy callbacks.** If a framework exists for the algorithm's family, the algorithm is a strategy of it: `nearest_neighbor()` is `greedy_construct(NearestSelector{})`. A framework is introduced when a second algorithm shares the same skeleton. An exact algorithm has no strategy.
+- **Strategy callbacks.** If a framework exists for the algorithm's family, the algorithm is a strategy of it: `nearest_neighbor()` is `greedy_construct(NearestSelector{})`. A framework is introduced when a second algorithm shares the same skeleton. An exact algorithm takes a strategy only where the choice leaves the result exact, as the lower bound of `branch_and_bound`, with a facade for the built-in choice.
 - **Justified exceptions.** A method that genuinely cannot honor a variant, because it is impossible or unreasonably costly, rejects it with a `static_assert` giving the reason, as `rotate_to_front` and `path_cost` do. State the reason in its declaration comment, list the case in the "Applicability" table of [CALLBACKS.md](CALLBACKS.md), and add a [compile-fail test](#compile-fail-tests). Each variant is thus either honored or rejected at compile time.
 
 ### Time limit support
@@ -266,7 +267,7 @@ A PR adding an algorithm is complete when:
 - the algorithm follows [Time limit support](#time-limit-support);
 - `tests/test_callbacks.cpp` has a protocol test using `LoggingCallbacks`: exact counts and order of `move_prepare` / `move_filter` on a small instance, for each move type the algorithm emits (see `protocol_held_karp_logging`);
 - [algorithm-specific tests](#algorithm-specific-tests) cover any behavior beyond the common contract;
-- removing the algorithm's `invoke_filter` calls, then its `invoke_prepare` calls, then its `ctx_.commit` calls makes at least one test fail each time. Check it once by hand and revert: it proves the tests see the variant;
+- removing the algorithm's `invoke_filter` calls, then its `invoke_prepare` calls, then its `ctx_.commit` calls makes at least one test fail each time; an algorithm built on the pipeline primitives (`evaluate_append`, `append`, `evaluate_replay`) passes the same check on its use of them, for example by scoring on raw distances or by ignoring the status `append` leaves. Check it once by hand and revert: it proves the tests see the variant;
 - `README.md` ("Available algorithms"), `CALLBACKS.md` ("Applicability") and `CHANGELOG.md` (`## Unreleased`, public interface changes under `### Breaking`) are updated, and a new test file is added to the tree in [Writing tests](#writing-tests) and to `CLAUDE.md`;
 - the PR description includes the [benchmark results](#benchmark-requirements).
 
@@ -339,14 +340,14 @@ namespace periple::my_constraint {
 struct Strict {
     using dimension = RouteTiming;  // declares which dimensions this variant needs
 
-    // Constructive algorithms (AppendMove)
+    // Every algorithm but held_karp (AppendMove)
     template <typename CityT, typename Ctx>
     void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const { /* ... */ }
 
     template <typename CityT, typename Ctx>
     bool move_filter(const AppendMove<CityT>& m, const Ctx& ctx) const { /* ... */ }
 
-    // Exact algorithms (DPMove)
+    // held_karp (DPMove)
     template <typename CityT, typename Ctx>
     void move_prepare(const DPMove<CityT>& m, Ctx& ctx) const { /* ... */ }
 
@@ -395,6 +396,7 @@ tests/
         variant_registry.hpp
         test_two_opt.cpp
         test_held_karp_time_windows.cpp
+        test_branch_and_bound.cpp
 ```
 
 ### Automated algorithm tests
@@ -402,7 +404,7 @@ tests/
 Any algorithm registered in the [algorithm registry](#step-6-register-in-the-algorithm-registry) is tested automatically, its traits (`is_exact`, `symmetric_only`) narrowing or strengthening what is checked:
 
 - **`test_algorithms`**: valid tour (sizes 0 to 5), reported cost equal to a recomputation, the brute-force optimum for an exact algorithm and at least the optimum for a heuristic, on symmetric and asymmetric instances, a second run after `set_matrix`, and the [output invariants](#output-invariants) around every call.
-- **`test_variants`**: every shipped variant of `tests/algorithms/variant_registry.hpp`, against the brute-force optimum of the `AppendMove` pipeline; and oracles with a constrained optimum known by brute force, one per mechanism: a surcharge per edge (`move_prepare`), forbidden edges (`move_filter`), deadlines (a dimension).
+- **`test_variants`**: every shipped variant of `tests/algorithms/variant_registry.hpp`, against the brute-force optimum of the `AppendMove` pipeline; and oracles with a constrained optimum known by brute force, one per mechanism: a surcharge per edge (`move_prepare`), forbidden edges (`move_filter`), deadlines (a dimension). An exact algorithm must also prove infeasibility and drop the tour on instances with no tour.
 - **`test_limits`**: [Time limit support](#time-limit-support) under an expired limit and a short one, preparation included, then a second run on the stopped solver.
 
 Run a single algorithm's tests by passing its tag:

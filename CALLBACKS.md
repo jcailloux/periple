@@ -5,9 +5,9 @@ Periple's callback architecture lets you customize algorithm behavior without mo
 ## Two kinds of callbacks
 
 - **Variant callbacks** describe the *problem* (constraints, adjusted costs, state tracking). Example: time windows, service times.
-- **Strategy callbacks** define the *algorithm* inside a generic framework (which city to append next). Example: nearest-city selection.
+- **Strategy callbacks** define the *algorithm* inside a generic framework (which city to append next, which branch to prune). Examples: nearest-city selection, a lower bound.
 
-Ready-to-use algorithms (`nearest_neighbor`, `held_karp`) have a built-in strategy and only accept variant callbacks. Generic frameworks (`greedy_construct`) take a strategy and optionally variant callbacks via the Solver's second template parameter.
+Ready-to-use algorithms (`nearest_neighbor`, `held_karp`, `branch_and_bound()`) have a built-in strategy and only accept variant callbacks. Generic frameworks (`greedy_construct`, `branch_and_bound(bound)`) take a strategy and optionally variant callbacks via the Solver's second template parameter.
 
 Both use the same mechanism: structs with member functions detected via `if constexpr` + `requires`.
 
@@ -71,12 +71,12 @@ Each algorithm family defines its own move types. Variant callbacks provide over
 
 | Move type | Algorithm family | Fields |
 |---|---|---|
-| `AppendMove<CityT>` | Constructive (NN, greedy) + closing edge + replay | `city` |
+| `AppendMove<CityT>` | Constructive (NN, greedy), branch and bound + closing edge + replay | `city` |
 | `DPMove<CityT>` | Exact (Held-Karp) | `from`, `to`, `set` |
 
 `DPMove::set` is a bitmask of visited cities (includes `from`, excludes `to`).
 
-A variant supporting both constructive and exact algorithms provides overloads for both:
+A variant supporting `held_karp` provides overloads for both:
 
 ```cpp
 struct MyVariant {
@@ -198,6 +198,46 @@ solver.nearest_neighbor({.start_city = 0});
 solver.greedy_construct(periple::NearestSelector{}, {.start_city = 0});
 ```
 
+### `branch_and_bound`
+
+Explores tours depth first, extending the tour one city at a time through the variant pipeline, cheapest first. To a variant the search is a construction: `ctx.tour()` and `ctx.position()` hold the current branch. The strategy is the lower bound that prunes a branch.
+
+**Required**: `lower_bound(solver, cutoff)` returning a `double`: a lower bound on the cost still to pay, from the last placed city through every unvisited city back to the first, penalties included. It runs after each append that leaves a city unvisited, and a value `>= cutoff` prunes the branch. `cutoff` is the best tour's cost minus the current one, `+infinity` until a tour is known, so a bound can stop refining as soon as it prunes.
+
+```cpp
+struct ZeroBound {  // valid for non-negative distances, prunes little
+    template <typename Solver>
+    double lower_bound(const Solver&, double) const { return 0.0; }
+};
+
+solver.branch_and_bound(ZeroBound{}, {.max_nodes = 100000});
+```
+
+**Optional**:
+
+- `lower_bound(solver, cutoff, stop)` in place of the two-parameter form, for a bound that runs long: `stop()` returns `true` once `time_limit` has passed, and the bound then returns the best value it holds, `-infinity` at worst.
+- `begin(solver)` or `begin(solver, stop)`, called once per search with the start in place, to size buffers or sort edges.
+- `static constexpr bool assumes_nonnegative_penalties = true`, for a bound computed on raw distances: the search then asserts that no `move_prepare` lowers a move's cost.
+
+Two built-in bounds, both computed on raw distances: a variant with negative penalties passes its own bound.
+
+| Bound | Instances | Per node |
+|---|---|---|
+| `OutgoingEdgeBound` | any | O(n) per remaining city, each city's edges sorted on first use |
+| `SpanningTreeBound` | symmetric distances | up to its member `iterations` (default 30) minimum spanning trees over the remaining cities |
+
+`branch_and_bound()` uses `SpanningTreeBound` under `set_symmetric(true)` and `OutgoingEdgeBound` otherwise. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches.
+
+A complete tour held on entry is the first tour to beat. Without a variant any tour counts, rotated to `start_city`. With a variant the cost depends on the start, so the tour must start at `start_city`: call `clear()` first otherwise. `resume_at` keeps `tour[0..resume_at)` and searches its completions.
+
+| End of search | Status |
+|---|---|
+| tree exhausted | `optimal`, or `feasible` if `resume_at > 1`: optimal among the prefix's completions |
+| tree exhausted, no tour | `infeasible`, empty tour |
+| `max_nodes` or `time_limit` reached | `feasible` with the best tour, or else `partial` with the prefix it started from |
+
+`time_limit` applies between nodes and within a strategy call that takes `stop`; a call without it runs to its end.
+
 ## Partial tours
 
 `set_tour` accepts a prefix shorter than the full problem size. Algorithms can resume from a partial tour:
@@ -208,7 +248,7 @@ solver.set_tour(prefix);                                   // status = partial
 solver.nearest_neighbor({.resume_at = solver.tour().size()});  // completes from the prefix
 ```
 
-When resuming, `rebuild_and_cost` replays the prefix through the full pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. No manual state management is needed.
+When resuming, `rebuild_and_cost` replays the prefix through the full pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. No manual state management is needed. `branch_and_bound` takes `resume_at` too, and searches the prefix's completions.
 
 ## Local search and replay
 
@@ -256,13 +296,13 @@ bool improve_once(Solver& solver) {
 
 ## Variant callbacks and symmetry
 
-Symmetry is a property of the **full problem** (distance matrix + variant callbacks), not of the distance matrix alone. Variant callbacks can break symmetry even on a symmetric matrix (e.g., direction-dependent time windows).
+`set_symmetric` declares the symmetry of the distances. In debug builds, `set_symmetric(true)` asserts it on the distance source. Use `set_symmetric(true, periple::unchecked)` to skip this check.
 
-Use `set_symmetric` to declare the effective symmetry. In debug builds, `set_symmetric(true)` asserts that the distance matrix is symmetric. Use `set_symmetric(true, periple::unchecked)` to skip this check.
+A variant can make a tour's cost depend on its direction even on symmetric distances (e.g., time windows). The algorithms account for this themselves: with a variant, `two_opt` replays every candidate, and the bound of `branch_and_bound` reads distances alone. Declare symmetric distances as such, variant or not:
 
 ```cpp
-solver.set_symmetric(true);                       // symmetric problem
-solver.set_symmetric(false);                      // asymmetric (e.g., TSPTW)
+solver.set_symmetric(true);                       // symmetric distances
+solver.set_symmetric(false);                      // asymmetric distances (default)
 solver.set_symmetric(true, periple::unchecked);   // trust me, skip check
 ```
 
@@ -272,6 +312,7 @@ solver.set_symmetric(true, periple::unchecked);   // trust me, skip check
 |---|---|---|
 | Constructive (NN, greedy) | yes | yes |
 | Exact (Held-Karp) | yes | yes |
+| Exact (branch and bound) | yes | yes |
 | Local search (2-opt) | yes | yes (replayed as `AppendMove`) |
 
 ## Variants
