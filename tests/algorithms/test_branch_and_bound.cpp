@@ -78,12 +78,12 @@ auto pipeline_optimum(const Dist& dist, const Variant& variant, std::vector<std:
 }
 
 // ---------------------------------------------------------------------------
-// Default bounds against held_karp
+// Bounds against held_karp
 // ---------------------------------------------------------------------------
 
-// Both default bounds, with and without a tour to beat, n = 3..9; the
-// asymmetric one holds on symmetric instances too.
-void test_default_bounds_match_held_karp() {
+// The default bounds and AssignmentBound, with and without a tour to beat,
+// n = 3..9; the asymmetric default holds on symmetric instances too.
+void test_bounds_match_held_karp() {
 	Rng rng{0x9E3779B97F4A7C15ull};
 	for (std::size_t n = 3; n <= 9; ++n) {
 		for (int seed = 0; seed < 10; ++seed) {
@@ -124,6 +124,17 @@ void test_default_bounds_match_held_karp() {
 			run_checked(warm_asym, [&] { warm_asym.branch_and_bound(); });
 			assert(warm_asym.status() == SolutionStatus::optimal && warm_asym.cost() == exact_asym.cost()
 				&& "SpanningArborescenceBound must keep the optimum below a held tour");
+
+			Solver assignment(asym);
+			run_checked(assignment, [&] { assignment.branch_and_bound(AssignmentBound{}); });
+			assert(assignment.status() == SolutionStatus::optimal && assignment.cost() == exact_asym.cost()
+				&& "AssignmentBound must keep the optimum");
+
+			Solver warm_assignment(asym);
+			warm_assignment.nearest_neighbor().two_opt();
+			run_checked(warm_assignment, [&] { warm_assignment.branch_and_bound(AssignmentBound{}); });
+			assert(warm_assignment.status() == SolutionStatus::optimal && warm_assignment.cost() == exact_asym.cost()
+				&& "AssignmentBound must keep the optimum below a held tour");
 		}
 	}
 }
@@ -194,8 +205,68 @@ void test_arborescence_is_minimum() {
 	}
 }
 
-// Along a chain of depths, each node ascending from its parent's weights toward
-// a cutoff around the optimal completion, a bound never exceeds that completion.
+// Cheapest assignment of last and the cities off the prefix to those cities and
+// first, by enumeration: no city to itself, and last never goes straight to first
+// while a city remains between them.
+int min_assignment(const DistanceMatrix<int>& dist, const std::vector<std::size_t>& prefix) {
+	std::vector<std::size_t> rest;
+	for (std::size_t c = 0; c < dist.size(); ++c)
+		if (std::find(prefix.begin(), prefix.end(), c) == prefix.end()) rest.push_back(c);
+	std::vector<std::size_t> rows{prefix.back()}, cols = rest;
+	rows.insert(rows.end(), rest.begin(), rest.end());
+	cols.push_back(prefix.front());
+	std::sort(cols.begin(), cols.end());
+	int best = std::numeric_limits<int>::max();
+	do {
+		bool ok = cols[0] != prefix.front();
+		for (std::size_t r = 1; r < rows.size() && ok; ++r) ok = cols[r] != rows[r];
+		if (!ok) continue;
+		int cost = 0;
+		for (std::size_t r = 0; r < rows.size(); ++r) cost += dist(rows[r], cols[r]);
+		best = std::min(best, cost);
+	} while (std::next_permutation(cols.begin(), cols.end()));
+	return best;
+}
+
+// Along a chain of depths, each node starting from its parent's: with a cutoff,
+// the value never exceeds the minimum assignment, and reaches the cutoff or
+// equals that minimum; without one, it is the minimum. Small costs give ties;
+// up to 8 cities.
+void test_assignment_is_minimum() {
+	Rng rng{0xB5C0FBCFEC4D3B2Full};
+	auto never = [] { return false; };
+	for (const int hi : {5, 1000}) {
+		for (std::size_t n = 3; n <= 8; ++n) {
+			for (int seed = 0; seed < 20; ++seed) {
+				auto dist = random_asym(rng, n, hi);
+				std::vector<std::size_t> order(n);
+				std::iota(order.begin(), order.end(), std::size_t{0});
+				for (std::size_t i = n - 1; i > 0; --i)
+					std::swap(order[i], order[static_cast<std::size_t>(rng.below(static_cast<int>(i) + 1))]);
+				const std::size_t root = 1 + static_cast<std::size_t>(rng.below(static_cast<int>(n) - 2));
+
+				Solver solver(dist);
+				for (std::size_t d = 0; d < root; ++d) solver.append(order[d]);
+				AssignmentBound bound;
+				bound.begin(solver, never);
+				for (std::size_t d = root; d + 1 < n; ++d) {
+					solver.append(order[d]);
+					const std::vector<std::size_t> prefix(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(d + 1));
+					const int exact = min_assignment(dist, prefix);
+					const double cutoff = exact * (0.5 + rng.below(101) / 100.0);
+					const double cut = bound.lower_bound(solver, cutoff, never);
+					assert(cut <= exact && (cut >= cutoff || cut == exact)
+						&& "AssignmentBound with a cutoff must reach it or return the minimum assignment");
+					assert(bound.lower_bound(solver, std::numeric_limits<double>::infinity(), never) == exact
+						&& "AssignmentBound without a cutoff must return the minimum assignment");
+				}
+			}
+		}
+	}
+}
+
+// Along a chain of depths, each node starting from its parent's state, with a
+// cutoff around the optimal completion, a bound never exceeds that completion.
 template <typename Dist, typename Bound>
 void check_below_completion(const Dist& dist, Bound bound, bool symmetric, Rng& rng) {
 	auto never = [] { return false; };
@@ -207,7 +278,8 @@ void check_below_completion(const Dist& dist, Bound bound, bool symmetric, Rng& 
 	Solver solver(dist);
 	if (symmetric) solver.set_symmetric(true);
 	solver.append(order[0]);
-	bound.begin(solver);
+	if constexpr (requires { bound.begin(solver, never); }) bound.begin(solver, never);
+	else bound.begin(solver);
 	for (std::size_t d = 1; d + 1 < n; ++d) {
 		solver.append(order[d]);
 		const std::vector<std::size_t> prefix(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(d + 1));
@@ -223,9 +295,12 @@ void test_bounds_below_completion() {
 	for (const int hi : {5, 1000}) {
 		for (std::size_t n = 4; n <= 8; ++n) {
 			for (int seed = 0; seed < 10; ++seed) {
-				check_below_completion(random_asym(rng, n, hi), SpanningArborescenceBound{}, false, rng);
+				auto asym = random_asym(rng, n, hi);
+				check_below_completion(asym, SpanningArborescenceBound{}, false, rng);
+				check_below_completion(asym, AssignmentBound{}, false, rng);
 				auto sym = random_sym(rng, n, hi);
 				check_below_completion(sym, SpanningArborescenceBound{}, false, rng);
+				check_below_completion(sym, AssignmentBound{}, false, rng);
 				check_below_completion(sym, SpanningTreeBound{}, true, rng);
 			}
 		}
@@ -295,12 +370,16 @@ void test_double_costs() {
 			solver.set_symmetric(true);
 			run_checked(solver, [&] { solver.branch_and_bound(); });
 			assert(std::abs(solver.cost() - exact.cost()) < 1e-9 && "the rounding margin must not cut the optimum");
+			Solver assignment(m);
+			run_checked(assignment, [&] { assignment.branch_and_bound(AssignmentBound{}); });
+			assert(std::abs(assignment.cost() - exact.cost()) < 1e-9
+				&& "the rounding margin must not cut the optimum under AssignmentBound");
 		}
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Variants under both default bounds (test_variants runs SpanningArborescenceBound)
+// Variants under the bounds (test_variants runs SpanningArborescenceBound)
 // ---------------------------------------------------------------------------
 
 void test_symmetric_relaxed_windows() {
@@ -341,6 +420,11 @@ void test_asymmetric_windows() {
 			assert(soft.status() == SolutionStatus::optimal && soft.cost() == *soft_best
 				&& "SpanningArborescenceBound must keep the optimum under penalties");
 
+			Solver soft_assignment(asym, relaxed);
+			run_checked(soft_assignment, [&] { soft_assignment.branch_and_bound(AssignmentBound{}); });
+			assert(soft_assignment.status() == SolutionStatus::optimal && soft_assignment.cost() == *soft_best
+				&& "AssignmentBound must keep the optimum under penalties");
+
 			time_windows::Strict strict(windows);
 			Solver hard(asym, strict);
 			run_checked(hard, [&] { hard.branch_and_bound(); });
@@ -348,6 +432,12 @@ void test_asymmetric_windows() {
 			assert((hard_best ? hard.status() == SolutionStatus::optimal && hard.cost() == *hard_best
 			                  : hard.status() == SolutionStatus::infeasible)
 				&& "SpanningArborescenceBound must keep the optimum under deadlines, or prove there is none");
+
+			Solver hard_assignment(asym, strict);
+			run_checked(hard_assignment, [&] { hard_assignment.branch_and_bound(AssignmentBound{}); });
+			assert((hard_best ? hard_assignment.status() == SolutionStatus::optimal && hard_assignment.cost() == *hard_best
+			                  : hard_assignment.status() == SolutionStatus::infeasible)
+				&& "AssignmentBound must keep the optimum under deadlines, or prove there is none");
 		}
 	}
 }
@@ -484,34 +574,43 @@ void test_limit_keeps_prefix() {
 		&& "the given prefix is kept");
 }
 
-// On 500 cities a bound that ran to its end would outlast the allowance, so
-// coming back in time proves it read stop. Up to 20 runs, stopping at the first
-// on time, since a preempted run lags by a whole time slice.
+// A bound that ran to its end would outlast the allowance, so coming back in
+// time proves it read stop. Up to 20 runs, stopping at the first on time, since
+// a preempted run lags by a whole time slice.
 void test_limit_stops_the_bound() {
 	using namespace std::chrono;
 	Rng rng{0x9B05688C2B3E6C1Full};
-	auto dist = random_sym(rng, 500, 1000);
 	constexpr auto limit = milliseconds{1};
 	constexpr auto allowed = limit + milliseconds{4};
-	// Bounds that ignored stop would overrun by far.
-	SpanningTreeBound long_tree;
-	long_tree.iterations = 1000;
-	SpanningArborescenceBound long_arborescence;
-	long_arborescence.iterations = 1000;
-	for (const bool symmetric : {false, true}) {
+	auto stops_in_time = [&](const auto& dist, bool symmetric, auto bound) {
 		auto best = nanoseconds::max();
 		for (int run = 0; run < 20 && best >= allowed; ++run) {
 			Solver solver(dist);
 			solver.set_symmetric(symmetric, unchecked);
-			solver.nearest_neighbor();  // a finite cutoff: both bounds ascend
+			solver.nearest_neighbor();  // a finite cutoff: the spanning bounds ascend
 			const auto start = steady_clock::now();
-			if (symmetric) solver.branch_and_bound(long_tree, {.time_limit = limit});
-			else solver.branch_and_bound(long_arborescence, {.time_limit = limit});
+			solver.branch_and_bound(bound, {.time_limit = limit});
 			best = std::min(best, duration_cast<nanoseconds>(steady_clock::now() - start));
 			assert(solver.status() == SolutionStatus::feasible && "stopped early, the search returns the held tour or a better one");
 		}
 		assert(best < allowed && "a limit stops a bound under way");
-	}
+	};
+	// Bounds that ignored stop would overrun by far: the spanning bounds ascend
+	// 1000 steps per node on 500 cities, and on costs i * j the assignment of 400
+	// cities takes long at the root.
+	const auto dist = random_sym(rng, 500, 1000);
+	SpanningTreeBound long_tree;
+	long_tree.iterations = 1000;
+	stops_in_time(dist, true, long_tree);
+	SpanningArborescenceBound long_arborescence;
+	long_arborescence.iterations = 1000;
+	stops_in_time(dist, false, long_arborescence);
+	constexpr std::size_t n = 400;
+	std::vector<int> products(n * n, 0);
+	for (std::size_t i = 0; i < n; ++i)
+		for (std::size_t j = 0; j < n; ++j)
+			if (i != j) products[i * n + j] = static_cast<int>(i * j) + 1;
+	stops_in_time(DistanceMatrix<int>(n, products), false, AssignmentBound{});
 }
 
 // ---------------------------------------------------------------------------
@@ -588,8 +687,9 @@ void test_custom_bound() {
 int main() {
 	struct Test { const char* name; void (*fn)(); };
 	Test tests[] = {
-		{"default_bounds_match_held_karp", test_default_bounds_match_held_karp},
+		{"bounds_match_held_karp",         test_bounds_match_held_karp},
 		{"arborescence_is_minimum",        test_arborescence_is_minimum},
+		{"assignment_is_minimum",          test_assignment_is_minimum},
 		{"bounds_below_completion",        test_bounds_below_completion},
 		{"tsplib_optima",                  test_tsplib_optima},
 		{"jonker_volgenant_view",          test_jonker_volgenant_view},
