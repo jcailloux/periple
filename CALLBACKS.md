@@ -251,7 +251,7 @@ A complete tour held on entry is the first tour to beat. Without a variant any t
 `CheapestFirst`, the default, sorts by score, ties to the lowest city: the first descent makes `nearest_neighbor`'s choices.
 
 ```cpp
-struct EarliestDeadline {  // for time windows
+struct EarliestDeadline {
     const std::vector<periple::time_windows::TimeWindow>* windows;
 
     template <typename Solver, typename Child>
