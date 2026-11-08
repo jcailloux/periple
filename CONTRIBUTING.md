@@ -18,6 +18,10 @@ CI runs automatically on every push and pull request to `main` and `dev` (Debug 
 
 Pull requests should target the `dev` branch. `main` is updated from `dev` at release time.
 
+## Use of generative AI
+
+AI assistants are welcome. Say in the pull request which one you used and for what. You answer for what you submit as for code written by hand: you have read, understood and tested it, and checked every citation it makes against its source.
+
 ## Architecture
 
 ### Solver

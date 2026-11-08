@@ -28,7 +28,7 @@ Service times do not affect the tour cost directly (cost is based on travel dist
 Each city has one or more time windows `{earliest, latest}`. A vehicle arriving before `earliest` waits; arriving after `latest` is a violation.
 
 > [!WARNING]
-> Under `Relaxed`, or `Strict` with windows that force waiting (`earliest > 0`), `held_karp` may return a costlier tour as `optimal`; under `Strict` with waiting, it may also report `infeasible` for a feasible instance. See the known issues in CHANGELOG.md. `branch_and_bound` is exact under all of them, and much faster with `set_symmetric(true)` on symmetric distances.
+> Under `Relaxed`, or `Strict` with windows that force waiting (`earliest > 0`), `held_karp` may return a costlier tour as `optimal`; under `Strict` with waiting, it may also report `infeasible` for a feasible instance. See the known issues in CHANGELOG.md. `branch_and_bound` is exact under all of them: [Choosing an exact solver](README.md#choosing-an-exact-solver) gives its call for your distances.
 
 ### TimeWindow
 
