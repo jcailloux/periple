@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- `variants/time_windows.hpp` and `variants/service_times.hpp` compile when included first: `RouteTiming` includes the `AppendMove` header it uses.
 - The custom dimension example in VARIANTS.md read its position from `ctx.tour()`, which is empty during a replay, did not stage its state, and called an undefined `demand()`.
 - `jonker_volgenant()`: forbidden edges cost `big_m` instead of the largest value of the cost type, which overflowed integer costs under `branch_and_bound` and directed `two_opt`.
 - The README documented a tour cost function and variant arguments on algorithm methods that do not exist. A variant is set on the solver: `Solver(dist, variant)` or `set_variant`.
