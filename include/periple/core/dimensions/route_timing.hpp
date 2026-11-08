@@ -10,6 +10,7 @@
 
 #include <periple/core/staged_vector.hpp>
 #include <periple/core/traits.hpp>
+#include <periple/core/moves/append_move.hpp>
 #include <periple/core/moves/dp_move.hpp>
 
 #include <cstddef>

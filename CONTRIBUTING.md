@@ -84,7 +84,7 @@ auto Solver<Dist, Variant>::nearest_neighbor(NearestNeighborParams params) -> So
 
 `greedy_construct` handles the generic loop: start city, repeated `strategy.select_next(solver)` + `append`, termination on `nullopt`.
 
-`held_karp` uses the pipeline directly with `DPMove`. `branch_and_bound` extends and backtracks through `evaluate_append`, `append` and `pop_back`, and takes its lower bound as a strategy; `branch_and_bound()` picks a built-in one.
+`held_karp` uses the pipeline directly with `DPMove`. `branch_and_bound` extends and backtracks through `evaluate_append`, `append` and `pop_back`, and takes as strategies its lower bound and, optionally, the order of the children; `branch_and_bound()` picks a built-in bound.
 
 > [!IMPORTANT]
 > `position_` is the inverse index of `tour_` and `visited_` its membership set. Both are invariants: every primitive that writes `tour_` maintains them, so an algorithm never refreshes them. Write the tour through those primitives rather than touching `tour_` directly.
@@ -133,7 +133,7 @@ Every algorithm honors every TSP variant:
 
 - **Variant callbacks.** Every move the algorithm evaluates or applies goes through the variant pipeline: `ctx_.init`, `invoke_prepare`, `invoke_filter`, then `ctx_.commit` for an applied move. The primitives `evaluate_append` / `append`, `evaluate_replay` / `accept_replay` and `evaluate_reversal` / `accept_reversal` do this for you. With a variant set, every decision and every cost comes from the pipeline. Callbacks read `ctx.tour()` and `ctx.position()` during construction only.
 - **Move types.** Prefer an existing move type, see [Step 2](#step-2-define-move-types-only-if-needed). `Solver` checks `AppendMove` coverage itself, and `evaluate_replay` checks staging. For each other move type the algorithm emits, add the `static_assert`s that the variant and its dimensions handle it, as `held_karp` does for `DPMove`.
-- **Strategy callbacks.** If a framework exists for the algorithm's family, the algorithm is a strategy of it: `nearest_neighbor()` is `greedy_construct(NearestSelector{})`. A framework is introduced when a second algorithm shares the same skeleton. An exact algorithm takes a strategy only where the choice leaves the result exact, as the lower bound of `branch_and_bound`, with a facade for the built-in choice.
+- **Strategy callbacks.** If a framework exists for the algorithm's family, the algorithm is a strategy of it: `nearest_neighbor()` is `greedy_construct(NearestSelector{})`. A framework is introduced when a second algorithm shares the same skeleton. An exact algorithm takes a strategy only where the choice leaves the result exact, as the lower bound and the order of the children of `branch_and_bound`, with a facade for the built-in choice.
 - **Justified exceptions.** A method that genuinely cannot honor a variant, because it is impossible or unreasonably costly, rejects it with a `static_assert` giving the reason, as `rotate_to_front` and `path_cost` do. State the reason in its declaration comment, list the case in the "Applicability" table of [CALLBACKS.md](CALLBACKS.md), and add a [compile-fail test](#compile-fail-tests). Each variant is thus either honored or rejected at compile time.
 
 ### Time limit support

@@ -84,3 +84,16 @@ periple_compile_fail(bb_no_lower_bound
     "branch_and_bound: the strategy needs lower_bound")
 periple_compile_fail(bb_no_order
     "branch_and_bound: the order needs order")
+
+# Each public header compiles on its own, so a header includes what it uses.
+file(GLOB_RECURSE periple_headers CONFIGURE_DEPENDS
+     RELATIVE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/periple/*.hpp)
+set(header_sources)
+foreach(header IN LISTS periple_headers)
+    string(MAKE_C_IDENTIFIER ${header} name)
+    set(source ${CMAKE_CURRENT_BINARY_DIR}/headers_alone/${name}.cpp)
+    file(CONFIGURE OUTPUT ${source} CONTENT "#include <${header}>\n" @ONLY)
+    list(APPEND header_sources ${source})
+endforeach()
+add_library(headers_alone OBJECT ${header_sources})
+target_link_libraries(headers_alone PRIVATE periple::periple)
