@@ -193,7 +193,7 @@ solver.set_symmetric(true);
 solver.nearest_neighbor().two_opt().branch_and_bound({.time_limit = std::chrono::seconds(10)});
 ```
 
-Stopped early, it returns that tour or a better one: within 10 s, 8 of the 9 Tier 2 instances end proved or improved. See [CALLBACKS.md](CALLBACKS.md#branch_and_bound) for the statuses, `resume_at` and custom bounds.
+Stopped early, it returns that tour or a better one: within 10 s, 8 of the 9 Tier 2 instances end proved or improved. See [CALLBACKS.md](CALLBACKS.md#branch_and_bound) for the statuses, `resume_at`, custom bounds and the order of the children.
 
 ### Generic frameworks
 
@@ -337,6 +337,7 @@ All algorithm methods return `Solver&` for chaining.
 | `held_karp(params)` | Exact solver, up to 25 cities |
 | `branch_and_bound(params)` | Exact search with the default bound (`start_city`, `resume_at`, `max_nodes`, `time_limit`) |
 | `branch_and_bound(bound, params)` | Same with your own lower bound |
+| `branch_and_bound(bound, order, params)` | Same with your own order of the children |
 | `greedy_construct(strategy, params)` | Generic construction framework |
 
 </details>

@@ -44,13 +44,13 @@
 //   -- shortest augmenting paths by Dijkstra on reduced costs, the columns at the
 //      current minimum scanned together, prices updated before augmenting (AssignmentBound)
 //
-// Extends the tour one city at a time, children cheapest first, through the
-// variant pipeline (evaluate_append, append), so every AppendMove variant is
-// honored. Little et al., Held, Karp and Volgenant, Jonker branch on edges, which
-// gives a smaller tree but no partial tour for a variant to judge. The Bound
-// strategy prunes a node whose completion cannot beat the best tour found.
-// Backtracking pops the last city: dimensions keep their state per position,
-// which the next append overwrites.
+// Extends the tour one city at a time, children in the order a strategy sets
+// (cheapest first by default), through the variant pipeline (evaluate_append,
+// append), so every AppendMove variant is honored. Little et al., Held, Karp and
+// Volgenant, Jonker branch on edges, which gives a smaller tree but no partial
+// tour for a variant to judge. The Bound strategy prunes a node whose completion
+// cannot beat the best tour found. Backtracking pops the last city: dimensions
+// keep their state per position, which the next append overwrites.
 
 #include <periple/core/solver.hpp>
 
@@ -76,6 +76,17 @@ concept assumes_nonnegative_penalties = requires { requires Bound::assumes_nonne
 template <typename Bound, typename S, typename... Stop>
 concept lower_bound_with = requires(Bound& b, const S& s, double cutoff, Stop&... stop) {
 	{ b.lower_bound(s, cutoff, stop...) } -> std::convertible_to<double>;
+};
+
+// An order that runs long takes a stop check as last argument, in either form.
+template <typename Order, typename S, typename Child, typename... Stop>
+concept order_with = requires(Order& o, const S& s, std::span<Child> children, double cutoff, Stop&... stop) {
+	o.order(s, children, cutoff, stop...);
+};
+
+template <typename Order, typename S, typename Child, typename... Stop>
+concept pick_with = requires(Order& o, const S& s, std::span<const Child> remaining, double cutoff, Stop&... stop) {
+	{ o.pick(s, remaining, cutoff, stop...) } -> std::convertible_to<std::size_t>;
 };
 
 // Distances as double, a row read on first use: an ascent comes back to the
@@ -113,6 +124,10 @@ double rounded_bound(double bound) {
 inline constexpr std::size_t ascent_patience = 5;
 
 } // namespace detail
+
+// What lower_bound returns for a node without a feasible completion: it prunes
+// the node even before any tour is known, when the cutoff is +infinity.
+inline constexpr double dead_end = std::numeric_limits<double>::infinity();
 
 // Lower bound for any instance, the directed mirror of SpanningTreeBound. The
 // rest of the tour is a path from the last placed city through every unvisited
@@ -683,6 +698,17 @@ private:
 	std::vector<double> dist_;
 };
 
+// The default order: cheapest score first, ties by city. The first descent
+// makes nearest_neighbor's choices.
+struct CheapestFirst {
+	template <DistanceSource Dist, typename Variant, typename CityT>
+	void order(const Solver<Dist, Variant>&, std::span<BranchChild<CityT>> children, double) const {
+		std::sort(children.begin(), children.end(), [](const auto& a, const auto& b) {
+			return a.score < b.score || (a.score == b.score && a.city < b.city);
+		});
+	}
+};
+
 // ---------------------------------------------------------------------------
 // Solver::branch_and_bound
 // ---------------------------------------------------------------------------
@@ -690,15 +716,22 @@ private:
 template <DistanceSource Dist, typename Variant>
 template <typename Bound>
 auto Solver<Dist, Variant>::branch_and_bound(Bound bound, BranchAndBoundParams params) -> Solver& {
+	return branch_and_bound(std::move(bound), CheapestFirst{}, params);
+}
+
+template <DistanceSource Dist, typename Variant>
+template <typename Bound, typename Order>
+	requires (!std::same_as<Order, BranchAndBoundParams>)
+auto Solver<Dist, Variant>::branch_and_bound(Bound bound, Order order, BranchAndBoundParams params) -> Solver& {
 	return detail::with_deadline(params.time_limit, [&](auto& deadline) -> Solver& {
-		return branch_and_bound_run(bound, params, deadline);
+		return branch_and_bound_run(bound, order, params, deadline);
 	});
 }
 
 template <DistanceSource Dist, typename Variant>
-template <typename Bound, typename D>
+template <typename Bound, typename Order, typename D>
 auto Solver<Dist, Variant>::branch_and_bound_run(
-	Bound& bound, const BranchAndBoundParams& params, D& deadline)
+	Bound& bound, Order& order, const BranchAndBoundParams& params, D& deadline)
 	-> Solver&
 {
 	detail::Poller stop(deadline);
@@ -706,6 +739,15 @@ auto Solver<Dist, Variant>::branch_and_bound_run(
 	constexpr bool takes_stop = detail::lower_bound_with<Bound, Solver, decltype(stop_bound)>;
 	static_assert(takes_stop || detail::lower_bound_with<Bound, Solver>,
 		"branch_and_bound: the strategy needs lower_bound(const Solver&, double cutoff) returning a double");
+	using Child = BranchChild<city_type>;
+	[[maybe_unused]] detail::Poller stop_order(deadline);  // nor the bound's: an order's units cost differently again
+	constexpr bool order_takes_stop = detail::order_with<Order, Solver, Child, decltype(stop_order)>;
+	constexpr bool orders = order_takes_stop || detail::order_with<Order, Solver, Child>;
+	constexpr bool pick_takes_stop = detail::pick_with<Order, Solver, Child, decltype(stop_order)>;
+	constexpr bool picks = pick_takes_stop || detail::pick_with<Order, Solver, Child>;
+	static_assert(orders || picks,
+		"branch_and_bound: the order needs order(const Solver&, std::span<BranchChild>, double cutoff) "
+		"or pick(const Solver&, std::span<const BranchChild>, double cutoff) returning a std::size_t");
 
 	assert(dist_ && "branch_and_bound: no distance source set");
 
@@ -751,6 +793,12 @@ auto Solver<Dist, Variant>::branch_and_bound_run(
 		append(static_cast<city_type>(params.start_city));
 	}
 
+	// What the rest of the tour must cost less than, to beat the best tour.
+	auto current_cutoff = [&] {
+		return found ? static_cast<double>(best_cost) - static_cast<double>(cost_)
+		             : std::numeric_limits<double>::infinity();
+	};
+
 	auto lower_bound = [&](double cutoff) -> double {
 		if constexpr (takes_stop) return bound.lower_bound(*this, cutoff, stop_bound);
 		else return bound.lower_bound(*this, cutoff);
@@ -762,8 +810,18 @@ auto Solver<Dist, Variant>::branch_and_bound_run(
 				&& "branch_and_bound: move_prepare set a negative cost_delta, which the bound assumes away (pass a bound valid for this variant)");
 	};
 
-	// Scores the children of the current node through the pipeline, cheapest first.
-	auto expand = [&] {
+#ifndef NDEBUG
+	// An order may only permute the children it was given (ws.scored, by city).
+	auto permutes_scored = [&](std::span<const Child> children) {
+		ws.ordered.assign(children.begin(), children.end());
+		std::sort(ws.ordered.begin(), ws.ordered.end(), [](const Child& a, const Child& b) { return a.city < b.city; });
+		return std::equal(ws.scored.begin(), ws.scored.end(), ws.ordered.begin(), ws.ordered.end(),
+		                  [](const Child& a, const Child& b) { return a.city == b.city && a.score == b.score; });
+	};
+#endif
+
+	// Scores the children of the current node through the pipeline, then orders them.
+	auto expand = [&]([[maybe_unused]] double cutoff) {
 		const std::size_t d = n_;
 		auto& kids = ws.children[d];
 		kids.clear();
@@ -776,9 +834,17 @@ auto Solver<Dist, Variant>::branch_and_bound_run(
 			check_penalty();
 			kids.push_back({*score, city});
 		}
-		std::sort(kids.begin(), kids.end(), [](const auto& a, const auto& b) {
-			return a.score < b.score || (a.score == b.score && a.city < b.city);
-		});
+		if constexpr (orders) {
+			// CheapestFirst only sorts, so it goes unchecked and debug builds run the default at full speed.
+			constexpr bool checked = !std::is_same_v<Order, CheapestFirst>;
+#ifndef NDEBUG
+			if constexpr (checked) ws.scored.assign(kids.begin(), kids.end());
+#endif
+			if constexpr (order_takes_stop) order.order(*this, std::span<Child>(kids), cutoff, stop_order);
+			else order.order(*this, std::span<Child>(kids), cutoff);
+			if constexpr (checked)
+				assert(permutes_scored(kids) && "branch_and_bound: order must permute the children, not change them");
+		}
 		ws.next[d] = 0;
 		ws.cost[d] = cost_;
 	};
@@ -797,7 +863,7 @@ auto Solver<Dist, Variant>::branch_and_bound_run(
 			bound.begin(*this, stop_begin);
 		else if constexpr (requires { bound.begin(*this); })
 			bound.begin(*this);
-		expand();
+		expand(current_cutoff());
 		for (;;) {
 			const std::size_t d = n_;
 			if (ws.next[d] == ws.children[d].size()) {
@@ -806,6 +872,19 @@ auto Solver<Dist, Variant>::branch_and_bound_run(
 				continue;
 			}
 			if (nodes == max_nodes || stop()) return false;
+			if constexpr (picks) {
+				auto& kids = ws.children[d];
+				const auto remaining = std::span<const Child>(kids).subspan(ws.next[d]);
+				const double cutoff = current_cutoff();
+				std::size_t j = 0;
+				if constexpr (pick_takes_stop) j = order.pick(*this, remaining, cutoff, stop_order);
+				else j = order.pick(*this, remaining, cutoff);
+				assert(j < remaining.size() && "branch_and_bound: pick must return an index into the remaining children");
+				// The picked child comes next, the others keep their order.
+				const auto first = kids.begin() + static_cast<std::ptrdiff_t>(ws.next[d]);
+				const auto picked = first + static_cast<std::ptrdiff_t>(j);
+				std::rotate(first, picked, picked + 1);
+			}
 			append(ws.children[d][ws.next[d]++].city);
 			++nodes;
 			if (n_ == total) {
@@ -817,13 +896,12 @@ auto Solver<Dist, Variant>::branch_and_bound_run(
 				pop_back(ws.cost[d]);
 				continue;
 			}
-			const double cutoff = found ? static_cast<double>(best_cost) - static_cast<double>(cost_)
-			                            : std::numeric_limits<double>::infinity();
+			const double cutoff = current_cutoff();
 			if (lower_bound(cutoff) >= cutoff) {
 				pop_back(ws.cost[d]);
 				continue;
 			}
-			expand();
+			expand(cutoff);
 		}
 	};
 	const bool exhausted = search();
