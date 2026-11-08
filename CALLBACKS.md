@@ -216,17 +216,18 @@ solver.branch_and_bound(ZeroBound{}, {.max_nodes = 100000});
 **Optional**:
 
 - `lower_bound(solver, cutoff, stop)` in place of the two-parameter form, for a bound that runs long: `stop()` returns `true` once `time_limit` has passed, and the bound then returns the best value it holds, `-infinity` at worst.
-- `begin(solver)` or `begin(solver, stop)`, called once per search with the start in place, to size buffers or sort edges.
+- `begin(solver)` or `begin(solver, stop)`, called once per search with the start in place, to size buffers or solve the root.
 - `static constexpr bool assumes_nonnegative_penalties = true`, for a bound computed on raw distances: the search then asserts that no `move_prepare` lowers a move's cost.
 
-Two built-in bounds, both computed on raw distances: a variant with negative penalties passes its own bound.
+Three built-in bounds, all computed on raw distances: a variant with negative penalties passes its own bound.
 
 | Bound | Instances | Per node |
 |---|---|---|
-| `OutgoingEdgeBound` | any | O(n) per remaining city, each city's edges sorted on first use |
-| `SpanningTreeBound` | symmetric distances | up to its member `iterations` (default 30) minimum spanning trees over the remaining cities |
+| `SpanningTreeBound` | symmetric distances | up to its member `iterations` (default 30) minimum spanning trees over the remaining cities, O(n^2) each |
+| `SpanningArborescenceBound` | any | up to its member `iterations` (default 30) minimum arborescences over the remaining cities, O(n^2) each |
+| `AssignmentBound` | any | at most two shortest augmenting paths, O(n^2) each; O(n^3) once, at the root |
 
-`branch_and_bound()` uses `SpanningTreeBound` under `set_symmetric(true)` and `OutgoingEdgeBound` otherwise. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches.
+`branch_and_bound()` uses `SpanningTreeBound` under `set_symmetric(true)` and `SpanningArborescenceBound` otherwise. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches, and when to pass `AssignmentBound`.
 
 A complete tour held on entry is the first tour to beat. Without a variant any tour counts, rotated to `start_city`. With a variant the cost depends on the start, so the tour must start at `start_city`: call `clear()` first otherwise. `resume_at` keeps `tour[0..resume_at)` and searches its completions.
 
