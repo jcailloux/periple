@@ -8,7 +8,7 @@
 - Benchmark runner: `--time-limit MS`.
 - `select_next(solver, stop)`: a construction strategy that runs long can honor `time_limit`.
 - `branch_and_bound()`: exact depth-first search through the `AppendMove` pipeline, so it honors every variant and stays exact under time windows. A complete tour held by the solver is the first to beat, `resume_at` searches the completions of a prefix, `max_nodes` and `time_limit` stop it early.
-- `branch_and_bound(bound)`: the same search with a lower bound strategy (`lower_bound`, optional `begin`). Built-in bounds: `OutgoingEdgeBound` for any instance, `SpanningTreeBound` for symmetric distances (Held-Karp Lagrangian relaxation, ascended at every node).
+- `branch_and_bound(bound)`: the same search with a lower bound strategy (`lower_bound`, optional `begin`). Built-in bounds: `SpanningTreeBound` for symmetric distances and `SpanningArborescenceBound` for any instance, Held-Karp Lagrangian relaxations ascended at every node and the defaults of `branch_and_bound()`; `AssignmentBound`, for costs without structure under time windows.
 
 ### Breaking
 

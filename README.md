@@ -167,7 +167,7 @@ See [CALLBACKS.md](CALLBACKS.md) for the callback architecture and [VARIANTS.md]
 |-----------|----------|------------|--------------|
 | Nearest neighbor | Construction | O(n^2) | full |
 | Held-Karp | Exact | O(n^2 * 2^n), n <= 25 | full |
-| Branch and bound | Exact | exponential worst case, O(n^2) per node | adapted |
+| Branch and bound | Exact | exponential worst case, O(n^2) per node | full |
 | 2-opt | Improvement | O(n * k) per pass | adapted |
 
 ATSP support: **full** = native asymmetric support, **adapted** = supported with different characteristics, **not yet** = symmetric only (use `jonker_volgenant()` to wrap your matrix).
@@ -176,16 +176,17 @@ ATSP support: **full** = native asymmetric support, **adapted** = supported with
 
 ### Choosing an exact solver
 
-`branch_and_bound` has no size limit and is exact under every variant with non-negative penalties. Its speed depends on its bound, so declare what holds:
+`branch_and_bound` has no size limit and is exact under every variant with non-negative penalties, including [time windows, where `held_karp` may not be](VARIANTS.md#time-windows-tsptw). Without a variant it outruns `held_karp` beyond a dozen cities: 5 ms against 4.7 s on 24 random asymmetric cities. Its speed depends on its bound, so declare what holds:
 
-| Distances | Call | Measured on one core of an i5-13500 |
+| Instance | Call | Measured on one core of an i5-13500 |
 |---|---|---|
-| Symmetric | `set_symmetric(true)`, then `branch_and_bound()` | Tier 1 within 3 ms, st70 in 1.7 s, kroB100 in 31 s, kroA100 unproved after 60 s |
+| Symmetric | `set_symmetric(true)`, then `branch_and_bound()` | Tier 1 within 3 ms, st70 in 1.5 s, kroB100 in 29 s, kroA100 unproved after 60 s |
 | Symmetric, with a variant | same | Under time windows, most instances of 20 to 40 cities within seconds; tight windows can take far longer |
-| Asymmetric | [`jonker_volgenant()`](DISTANCE_SOURCES.md#asymmetric-tsp-jonker-volgenant), then as above | Up to 20 s at 50 cities |
-| Asymmetric, with a variant | `held_karp()` up to 25 cities, `branch_and_bound()` beyond or [under time windows](VARIANTS.md#time-windows-tsptw) | `held_karp()`: 4 s at 24 cities. `branch_and_bound()` has a weak bound here: 50 ms to over 20 s around 20 cities, before any variant |
+| Asymmetric | `branch_and_bound()` | TSPLIB: ftv38 in 82 ms, ry48p in 0.16 s, ft70 in 3.0 s; p43, ftv64 and ftv70 unproved after 60 s |
+| Asymmetric, with a variant | same | Under time windows, every case measured at 20 cities within 2.0 s; at 30 and 40 cities, most stay unproved after 20 s unless the windows are loose |
+| Asymmetric, costs without structure, under time windows | `branch_and_bound(periple::AssignmentBound{})` | 30 cities in 0.27 s where `branch_and_bound()` takes 3.3 s; 40 cities in 1.3 and 2.2 s where it stops unproved at 20 s. On structured costs, keep `branch_and_bound()` |
 
-A complete tour held by the solver is the first tour to beat, which cuts the search time by 13 to 62% on the Tier 2 instances proved:
+A complete tour held by the solver is the first tour to beat, which cuts the search time by 12 to 61% on the Tier 2 instances proved:
 
 ```cpp
 solver.set_symmetric(true);
@@ -347,6 +348,10 @@ All algorithms are benchmarked on TSPLIB95 instances with known optimal solution
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding or improving algorithms.
+
+## Use of generative AI
+
+Periple is developed with an AI coding assistant, Claude Code (Anthropic). The assistant drafts code, tests, documentation and measurements. The author sets the design, decides each change, reviews it before committing it, and is responsible for the result.
 
 ## License
 
