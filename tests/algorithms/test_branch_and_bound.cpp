@@ -10,8 +10,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -643,7 +645,7 @@ struct WaitsInBegin {
 // Declares every node without a completion.
 struct RejectAll {
 	template <typename Solver>
-	double lower_bound(const Solver&, double) const { return std::numeric_limits<double>::infinity(); }
+	double lower_bound(const Solver&, double) const { return dead_end; }
 };
 
 void test_custom_bound() {
@@ -681,6 +683,311 @@ void test_custom_bound() {
 }
 
 // ---------------------------------------------------------------------------
+// Child order
+// ---------------------------------------------------------------------------
+
+// Most expensive child first, ties to the lowest city.
+struct Reverse {
+	template <typename Solver, typename Child>
+	void order(const Solver&, std::span<Child> children, double) const {
+		std::sort(children.begin(), children.end(), [](const Child& a, const Child& b) {
+			return a.score > b.score || (a.score == b.score && a.city < b.city);
+		});
+	}
+};
+
+struct Shuffle {
+	Rng rng{0x2545F4914F6CDD1Dull};
+
+	template <typename Solver, typename Child>
+	void order(const Solver&, std::span<Child> children, double) {
+		for (std::size_t i = children.size(); i > 1; --i)
+			std::swap(children[i - 1], children[static_cast<std::size_t>(rng.below(static_cast<int>(i)))]);
+	}
+};
+
+// The first cheapest child, or the first most expensive.
+template <typename Child>
+std::size_t cheapest(std::span<const Child> children) {
+	const auto by_score = [](const Child& a, const Child& b) { return a.score < b.score; };
+	return static_cast<std::size_t>(std::min_element(children.begin(), children.end(), by_score) - children.begin());
+}
+
+template <typename Child>
+std::size_t farthest(std::span<const Child> children) {
+	const auto by_score = [](const Child& a, const Child& b) { return a.score < b.score; };
+	return static_cast<std::size_t>(std::max_element(children.begin(), children.end(), by_score) - children.begin());
+}
+
+// Without an order form, the children stay in city order: the highest city first.
+struct PickLast {
+	template <typename Solver, typename Child>
+	std::size_t pick(const Solver&, std::span<const Child> remaining, double) const { return remaining.size() - 1; }
+};
+
+// Ties to the lowest city, as the children stay in city order.
+struct PickFarthest {
+	template <typename Solver, typename Child>
+	std::size_t pick(const Solver&, std::span<const Child> remaining, double) const { return farthest(remaining); }
+};
+
+// Both forms: shuffled once per node, then the cheapest remaining child.
+struct ShuffleThenCheapest : Shuffle {
+	template <typename Solver, typename Child>
+	std::size_t pick(const Solver&, std::span<const Child> remaining, double) const { return cheapest(remaining); }
+};
+
+// greedy_construct's counterpart of Reverse: the most expensive city, ties to the lowest.
+struct FarthestSelector {
+	template <typename Dist, typename Variant>
+	auto select_next(const Solver<Dist, Variant>& solver) const -> std::optional<typename dist_traits<Dist>::city_type> {
+		using city_type = typename dist_traits<Dist>::city_type;
+		std::optional<city_type> best;
+		double best_score = 0.0;
+		for (std::size_t c = 0; c < solver.size(); ++c) {
+			const auto city = static_cast<city_type>(c);
+			if (solver.is_visited(city)) continue;
+			const auto score = solver.evaluate_append(city);
+			if (score && (!best || *score > best_score)) {
+				best = city;
+				best_score = *score;
+			}
+		}
+		return best;
+	}
+};
+
+// The order decides which tour turns up first, not which one is optimal; with
+// deadlines some instances have no tour.
+void test_orders_keep_the_optimum() {
+	Rng rng{0x7137449123EF65CDull};
+	for (std::size_t n = 3; n <= 7; ++n) {
+		for (int seed = 0; seed < 10; ++seed) {
+			auto dist = random_asym(rng, n, 30);
+			std::vector<time_windows::TimeWindow> windows(n);
+			windows[0] = {0.0, 1e9};
+			for (std::size_t c = 1; c < n; ++c)
+				windows[c] = {static_cast<double>(rng.below(40)), static_cast<double>(20 + rng.below(80))};
+			time_windows::Relaxed relaxed(windows, 10);
+			time_windows::Strict strict(windows);
+			Solver exact(dist);
+			exact.held_karp();
+			const std::optional<int> free_best = exact.cost();
+			const auto soft_best = pipeline_optimum(dist, relaxed, {0});
+			const auto hard_best = pipeline_optimum(dist, strict, {0});
+
+			auto solves = [&](const auto& variant, std::optional<int> best, auto bound, auto order) {
+				Solver solver(dist, variant);
+				run_checked(solver, [&] { solver.branch_and_bound(bound, order); });
+				return best ? solver.status() == SolutionStatus::optimal && solver.cost() == *best
+				            : solver.status() == SolutionStatus::infeasible && solver.tour().empty();
+			};
+			auto check = [&](auto bound, auto order) {
+				assert(solves(NoCallbacks{}, free_best, bound, order) && "every order keeps the optimum");
+				assert(solves(relaxed, soft_best, bound, order) && "every order keeps the optimum under penalties");
+				assert(solves(strict, hard_best, bound, order)
+					&& "every order keeps the optimum under deadlines, or proves there is none");
+			};
+			auto check_orders = [&](auto bound) {
+				check(bound, CheapestFirst{});
+				check(bound, Reverse{});
+				check(bound, Shuffle{});
+				check(bound, PickLast{});
+				check(bound, ShuffleThenCheapest{});
+			};
+			check_orders(SpanningArborescenceBound{});
+			check_orders(AssignmentBound{});
+		}
+	}
+}
+
+// Stopped on its first tour, the search shows the order it followed: without a
+// tour to beat, no bound prunes the first descent.
+void test_order_is_honored() {
+	auto first_tour = [](const auto& dist, auto order) {
+		Solver solver(dist);
+		run_checked(solver, [&] {
+			solver.branch_and_bound(SpanningArborescenceBound{}, order, {.max_nodes = dist.size() - 1});
+		});
+		assert(solver.status() == SolutionStatus::feasible && "n - 1 nodes complete the first tour");
+		return std::vector<std::size_t>(solver.tour().begin(), solver.tour().end());
+	};
+	auto tour_of = [](const auto& solver) { return std::vector<std::size_t>(solver.tour().begin(), solver.tour().end()); };
+
+	Rng rng{0xB5C0FBCFEC4D3B2Full};
+	for (std::size_t n = 4; n <= 9; ++n) {
+		auto dist = random_asym(rng, n, 100);
+		Solver nearest(dist);
+		nearest.nearest_neighbor();
+		Solver far(dist);
+		far.greedy_construct(FarthestSelector{});
+		assert(first_tour(dist, CheapestFirst{}) == tour_of(nearest) && "CheapestFirst descends first along nearest_neighbor's tour");
+		assert(first_tour(dist, Reverse{}) == tour_of(far) && "order sets the first descent");
+		assert(first_tour(dist, PickFarthest{}) == tour_of(far) && "pick sets the first descent");
+	}
+
+	// Every score ties.
+	constexpr std::size_t n = 5;
+	std::vector<int> ten(n * n, 10);
+	for (std::size_t c = 0; c < n; ++c) ten[c * n + c] = 0;
+	DistanceMatrix<int> uniform(n, ten);
+	Solver nearest(uniform);
+	nearest.nearest_neighbor();
+	assert(first_tour(uniform, CheapestFirst{}) == tour_of(nearest) && "CheapestFirst breaks ties as nearest_neighbor does");
+}
+
+// Records what each pick saw, then picks the cheapest remaining child.
+struct RecordingPick {
+	struct Call {
+		std::vector<std::size_t> prefix, remaining;
+		std::size_t picked;
+		double best;  // cutoff plus the prefix cost: the best tour's cost, +infinity before any
+	};
+	std::vector<Call>* calls;
+
+	template <typename Solver, typename Child>
+	std::size_t pick(const Solver& solver, std::span<const Child> remaining, double cutoff) const {
+		const std::size_t j = cheapest(remaining);
+		Call call{{solver.tour().begin(), solver.tour().end()}, {}, remaining[j].city,
+		          cutoff + static_cast<double>(solver.cost())};
+		for (const auto& child : remaining) call.remaining.push_back(child.city);
+		calls->push_back(std::move(call));
+		return j;
+	}
+};
+
+void test_pick_sees_the_remaining_children() {
+	Rng rng{0x923F82A4AB1C5ED5ull};
+	constexpr std::size_t n = 7;
+	bool improved = false;
+	for (int seed = 0; seed < 10; ++seed) {
+		auto dist = random_asym(rng, n, 100);
+		std::vector<RecordingPick::Call> calls;
+		Solver solver(dist);
+		run_checked(solver, [&] { solver.branch_and_bound(SpanningArborescenceBound{}, RecordingPick{&calls}); });
+		Solver exact(dist);
+		exact.held_karp();
+		assert(solver.status() == SolutionStatus::optimal && solver.cost() == exact.cost()
+			&& "a pick strategy keeps the optimum");
+
+		// At a node, in call order: every child, then one fewer each time, never one already tried.
+		std::map<std::vector<std::size_t>, std::vector<const RecordingPick::Call*>> by_node;
+		for (const auto& call : calls) by_node[call.prefix].push_back(&call);
+		for (const auto& [prefix, node] : by_node) {
+			assert(node.front()->remaining.size() == n - prefix.size() && "the first pick at a node sees every child");
+			for (const auto* call : node)
+				assert(std::is_sorted(call->remaining.begin(), call->remaining.end())
+					&& "the children not picked keep their order, here the city order they were scored in");
+			assert(node.back()->remaining.size() == 1 && "the last child is picked too");
+			for (std::size_t t = 1; t < node.size(); ++t) {
+				auto expected = node[t - 1]->remaining;
+				std::erase(expected, node[t - 1]->picked);
+				auto seen = node[t]->remaining;
+				std::sort(expected.begin(), expected.end());
+				std::sort(seen.begin(), seen.end());
+				assert(seen == expected && "pick sees the children not yet tried, and only those");
+			}
+		}
+
+		// cutoff is +infinity until the first tour, nearest_neighbor's under the
+		// cheapest pick, then follows the best tour.
+		Solver nearest(dist);
+		nearest.nearest_neighbor();
+		assert(std::isinf(calls.front().best) && "cutoff is +infinity before any tour");
+		const auto first = std::find_if(calls.begin(), calls.end(), [](const auto& c) { return !std::isinf(c.best); });
+		assert(first != calls.end() && first->best == static_cast<double>(nearest.cost())
+			&& "cutoff turns finite with the first tour");
+		for (auto it = first + 1; it != calls.end(); ++it) {
+			assert(!std::isinf(it->best) && it->best <= (it - 1)->best && "cutoff follows the best tour, which only improves");
+			improved |= it->best < (it - 1)->best;
+		}
+	}
+	assert(improved && "some search improves on its first tour before its last pick");
+}
+
+// Records what each order call saw and leaves the children in city order.
+struct RecordingOrder {
+	struct Call {
+		std::size_t depth, children;
+		double best;  // cutoff plus the prefix cost, as in RecordingPick
+	};
+	std::vector<Call>* calls;
+
+	template <typename Solver, typename Child>
+	void order(const Solver& solver, std::span<Child> children, double cutoff) const {
+		calls->push_back({solver.tour().size(), children.size(), cutoff + static_cast<double>(solver.cost())});
+	}
+};
+
+void test_order_calls() {
+	Rng rng{0x12835B0145706FBEull};
+	constexpr std::size_t n = 7;
+	auto dist = random_asym(rng, n, 100);
+	std::vector<RecordingOrder::Call> calls;
+	Solver solver(dist);
+	run_checked(solver, [&] { solver.branch_and_bound(SpanningArborescenceBound{}, RecordingOrder{&calls}); });
+	assert(solver.status() == SolutionStatus::optimal && "an order strategy keeps the optimum");
+	assert(calls.front().depth == 1 && calls.front().children == n - 1 && "order runs at the root first");
+	// Children in city order: the first tour visits the cities in order.
+	std::vector<std::size_t> in_order(n);
+	std::iota(in_order.begin(), in_order.end(), std::size_t{0});
+	const auto first = std::find_if(calls.begin(), calls.end(), [](const auto& c) { return !std::isinf(c.best); });
+	assert(first != calls.end() && first->best == static_cast<double>(*pipeline_cost(dist, NoCallbacks{}, in_order))
+		&& "cutoff is +infinity until the first tour");
+	for (auto it = first + 1; it != calls.end(); ++it)
+		assert(!std::isinf(it->best) && it->best <= (it - 1)->best && "cutoff follows the best tour, which only improves");
+
+	DistanceMatrix<int> uniform(4, std::vector<int>{
+		 0, 10, 10, 10,
+		10,  0, 10, 10,
+		10, 10,  0, 10,
+		10, 10, 10,  0});
+	// Cities 1 and 3 close at 15: the second of them is always late.
+	const std::vector<time_windows::TimeWindow> windows = {{0.0, 1e9}, {0.0, 15.0}, {0.0, 1e9}, {0.0, 15.0}};
+	time_windows::Strict strict(windows);
+	std::vector<RecordingOrder::Call> late_calls;
+	Solver late(uniform, strict);
+	run_checked(late, [&] { late.branch_and_bound(SpanningArborescenceBound{}, RecordingOrder{&late_calls}); });
+	assert(late.status() == SolutionStatus::infeasible && "every tour is late");
+	assert(std::any_of(late_calls.begin(), late_calls.end(), [](const auto& c) { return c.children == 0; })
+		&& "order runs on a node without a feasible child");
+}
+
+// They wait for the limit, then leave the children as they are.
+struct WaitsInOrder {
+	template <typename Solver, typename Child, typename Stop>
+	void order(const Solver&, std::span<Child>, double, Stop& stop) const { while (!stop()) {} }
+};
+
+struct WaitsInPick {
+	template <typename Solver, typename Child, typename Stop>
+	std::size_t pick(const Solver&, std::span<const Child>, double, Stop& stop) const {
+		while (!stop()) {}
+		return 0;
+	}
+};
+
+void test_limit_stops_the_order() {
+	Rng rng{0xAB1C5ED5DA6D8118ull};
+	auto dist = random_asym(rng, 8, 100);
+	constexpr auto limit = std::chrono::milliseconds{1};
+
+	Solver ordering(dist);
+	run_checked(ordering, [&] {
+		ordering.branch_and_bound(SpanningArborescenceBound{}, WaitsInOrder{}, {.time_limit = limit});
+	});
+	assert(ordering.status() == SolutionStatus::partial && ordering.tour().size() == 1
+		&& "a limit reached in order ends the search");
+
+	Solver picking(dist);
+	run_checked(picking, [&] {
+		picking.branch_and_bound(SpanningArborescenceBound{}, WaitsInPick{}, {.time_limit = limit});
+	});
+	assert(picking.status() == SolutionStatus::partial && picking.tour().size() == 1
+		&& "a limit reached in pick ends the search");
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -703,6 +1010,11 @@ int main() {
 		{"limit_keeps_prefix",             test_limit_keeps_prefix},
 		{"limit_stops_the_bound",          test_limit_stops_the_bound},
 		{"custom_bound",                   test_custom_bound},
+		{"orders_keep_the_optimum",        test_orders_keep_the_optimum},
+		{"order_is_honored",               test_order_is_honored},
+		{"pick_sees_the_remaining_children", test_pick_sees_the_remaining_children},
+		{"order_calls",                    test_order_calls},
+		{"limit_stops_the_order",          test_limit_stops_the_order},
 	};
 	for (const auto& t : tests) {
 		std::printf("  %s ... ", t.name);

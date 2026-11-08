@@ -200,9 +200,9 @@ solver.greedy_construct(periple::NearestSelector{}, {.start_city = 0});
 
 ### `branch_and_bound`
 
-Explores tours depth first, extending the tour one city at a time through the variant pipeline, cheapest first. To a variant the search is a construction: `ctx.tour()` and `ctx.position()` hold the current branch. The strategy is the lower bound that prunes a branch.
+Explores tours depth first, extending the tour one city at a time through the variant pipeline. To a variant the search is a construction: `ctx.tour()` and `ctx.position()` hold the current branch. The strategy is the lower bound that prunes a branch; a second, optional one sets the [order of the children](#child-order).
 
-**Required**: `lower_bound(solver, cutoff)` returning a `double`: a lower bound on the cost still to pay, from the last placed city through every unvisited city back to the first, penalties included. It runs after each append that leaves a city unvisited, and a value `>= cutoff` prunes the branch. `cutoff` is the best tour's cost minus the current one, `+infinity` until a tour is known, so a bound can stop refining as soon as it prunes.
+**Required**: `lower_bound(solver, cutoff)` returning a `double`: a lower bound on the cost still to pay, from the last placed city through every unvisited city back to the first, penalties included. It runs after each append that leaves a city unvisited, and a value `>= cutoff` prunes the branch. `cutoff` is the best tour's cost minus the current one, `+infinity` until a tour is known, so a bound can stop refining as soon as it prunes. For a node without a feasible completion, the bound returns `periple::dead_end`, which prunes it even before any tour is known.
 
 ```cpp
 struct ZeroBound {  // valid for non-negative distances, prunes little
@@ -238,6 +238,32 @@ A complete tour held on entry is the first tour to beat. Without a variant any t
 | `max_nodes` or `time_limit` reached | `feasible` with the best tour, or else `partial` with the prefix it started from |
 
 `time_limit` applies between nodes and within a strategy call that takes `stop`; a call without it runs to its end.
+
+#### Child order
+
+`branch_and_bound(bound, order, params)` takes a strategy for the order in which a node's children are tried. It has either form, or both:
+
+- `order(solver, children, cutoff)`, once per node the search expands: the root, then each node the bound keeps. `children` is a `std::span<periple::BranchChild<city_type>>`, each child a `{score, city}` with its `evaluate_append` score, in city order, empty when no city is feasible. The strategy permutes it.
+- `pick(solver, remaining, cutoff)` returning a `std::size_t`, before each descent, the last child included. `remaining` is a `std::span<const periple::BranchChild<city_type>>` of the children not yet tried; the child at the returned index is tried next, and the others keep their order.
+
+`cutoff` is as for `lower_bound`, at the time of the call. A strategy that runs long takes `stop` as a fourth parameter, in either form; once `stop()` returns `true`, it returns at once, with the children in any order or any index in range. Debug builds assert that `order` only permutes and that `pick` returns an index in range.
+
+`CheapestFirst`, the default, sorts by score, ties to the lowest city: the first descent makes `nearest_neighbor`'s choices.
+
+```cpp
+struct EarliestDeadline {  // for time windows
+    const std::vector<periple::time_windows::TimeWindow>* windows;
+
+    template <typename Solver, typename Child>
+    void order(const Solver&, std::span<Child> children, double) const {
+        std::sort(children.begin(), children.end(), [&](const Child& a, const Child& b) {
+            return (*windows)[a.city].latest < (*windows)[b.city].latest;
+        });
+    }
+};
+
+solver.branch_and_bound(periple::SpanningArborescenceBound{}, EarliestDeadline{&windows});
+```
 
 ## Partial tours
 
