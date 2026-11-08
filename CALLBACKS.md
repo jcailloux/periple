@@ -227,7 +227,7 @@ Three built-in bounds, all computed on raw distances: a variant with negative pe
 | `SpanningArborescenceBound` | any | up to its member `iterations` (default 30) minimum arborescences over the remaining cities, O(n^2) each |
 | `AssignmentBound` | any | at most two shortest augmenting paths, O(n^2) each; O(n^3) once, at the root |
 
-`branch_and_bound()` uses `SpanningTreeBound` under `set_symmetric(true)` and `SpanningArborescenceBound` otherwise. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches, and when to pass `AssignmentBound`.
+`branch_and_bound()` uses `SpanningTreeBound` under `set_symmetric(true)` and `SpanningArborescenceBound` otherwise. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches, and when to pass `AssignmentBound`. Each bound has its own header, named after it, in `periple/algorithms/branch_and_bound/`; `branch_and_bound.hpp` includes the two defaults.
 
 A complete tour held on entry is the first tour to beat. Without a variant any tour counts, rotated to `start_city`. With a variant the cost depends on the start, so the tour must start at `start_city`: call `clear()` first otherwise. `resume_at` keeps `tour[0..resume_at)` and searches its completions.
 

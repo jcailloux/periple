@@ -1,50 +1,11 @@
 #pragma once
 
-// Nearest neighbor construction heuristic
-//
-// Rosenkrantz, Stearns, Lewis (1977), "An Analysis of Several Heuristics for the Traveling Salesman Problem"
+// Nearest neighbor construction heuristic: greedy_construct with NearestSelector
+// (greedy_construct/nearest_selector.hpp)
 
-#include <periple/algorithms/greedy_construct.hpp>
-
-#include <limits>
-#include <optional>
+#include <periple/algorithms/greedy_construct/nearest_selector.hpp>
 
 namespace periple {
-
-// Strategy for greedy_construct: selects the nearest unvisited city.
-// Uses solver.evaluate_append() for filtering and scoring (variant-aware).
-struct NearestSelector {
-
-	template <DistanceSource Dist, typename Variant>
-	auto select_next(const Solver<Dist, Variant>& solver) const
-		-> std::optional<typename dist_traits<Dist>::city_type>
-	{
-		using city_type = typename dist_traits<Dist>::city_type;
-
-		if (solver.tour().empty()) return std::nullopt;
-
-		double best_score = std::numeric_limits<double>::max();
-		city_type best_city{};
-		bool found = false;
-
-		for (std::size_t j = 0; j < solver.size(); ++j) {
-			auto candidate = static_cast<city_type>(j);
-			if (solver.is_visited(candidate)) continue;
-
-			auto result = solver.evaluate_append(candidate);
-			if (!result) continue;
-
-			if (!found || *result < best_score) {
-				best_score = *result;
-				best_city = candidate;
-				found = true;
-			}
-		}
-
-		if (!found) return std::nullopt;
-		return best_city;
-	}
-};
 
 // ---------------------------------------------------------------------------
 // Solver::nearest_neighbor -- facade using NearestSelector
