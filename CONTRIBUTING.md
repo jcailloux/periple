@@ -70,7 +70,7 @@ The Solver owns a `context_type` deduced from the variant's `dimension` typedef:
 
 ### Algorithm structure
 
-Algorithms are defined inline in `algorithms/*.hpp`. Each algorithm header includes `core/solver.hpp` and defines a `Solver::method()`.
+Algorithms are defined inline in `algorithms/*.hpp`, one header per `Solver::method()`, which includes `core/solver.hpp`. A ready-made strategy has its own header in the directory of the framework whose contract it implements, and includes that framework: `NearestSelector` in `algorithms/greedy_construct/nearest_selector.hpp`, the bounds of `branch_and_bound` in `algorithms/branch_and_bound/`, next to its search (`search.hpp`). A contract adopted by a second framework moves, with its strategies, to a directory of its own. A method's header includes the strategies it uses by default; a framework's own default, such as `CheapestFirst`, is defined with it.
 
 Constructive algorithms use `greedy_construct` with a strategy:
 
@@ -451,6 +451,7 @@ A known bug is pinned by a test that asserts the wrong result, in its own execut
 | Cache struct | `AbbreviationCache` (PascalCase) | `HKCache`, `LKCache`, `GACache` |
 | Cache file | `abbreviation_cache.hpp` | `hk_cache.hpp`, `lk_cache.hpp` |
 | Algorithm header | `algorithm_name.hpp` | `greedy_construct.hpp`, `two_opt.hpp` |
+| Strategy header | `strategy_name.hpp`, in `algorithms/framework_name/` | `greedy_construct/nearest_selector.hpp`, `branch_and_bound/assignment_bound.hpp` |
 | Registry struct | `AlgoAlgorithmName` (PascalCase) | `AlgoNearestNeighbor`, `AlgoNNTwoOpt` |
 | Variant namespace | `snake_case` | `time_windows`, `service_times` |
 | Variant struct | `PascalCase` | `Strict`, `Relaxed`, `ServiceTimes` |
