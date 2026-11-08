@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -197,6 +198,11 @@ public:
 	template <typename Bound>
 	auto branch_and_bound(Bound bound, BranchAndBoundParams params = {}) -> Solver&;
 
+	// Children in the order a strategy sets; the forms above use CheapestFirst.
+	template <typename Bound, typename Order>
+		requires (!std::same_as<Order, BranchAndBoundParams>)
+	auto branch_and_bound(Bound bound, Order order, BranchAndBoundParams params = {}) -> Solver&;
+
 #ifdef PERIPLE_TESTING
 	template <DistanceSource D, typename V> friend class SolverTestAccess;
 #endif
@@ -230,8 +236,8 @@ private:
 	template <typename D>
 	auto held_karp_run(D& deadline) -> Solver&;
 
-	template <typename Bound, typename D>
-	auto branch_and_bound_run(Bound& bound, const BranchAndBoundParams& params, D& deadline) -> Solver&;
+	template <typename Bound, typename Order, typename D>
+	auto branch_and_bound_run(Bound& bound, Order& order, const BranchAndBoundParams& params, D& deadline) -> Solver&;
 
 	template <detail::LocalSearchMode Mode, typename D>
 	void two_opt_run(const TwoOptParams& params, D& deadline);

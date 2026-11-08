@@ -55,6 +55,8 @@ periple_death_test(dp_reads_tour "ctx.tour\\(\\): no partial tour during a repla
 periple_death_test(bb_negative_penalty "branch_and_bound: move_prepare set a negative cost_delta")
 periple_death_test(bb_held_tour_elsewhere "branch_and_bound: with a variant, a held tour starting elsewhere")
 periple_death_test(bb_spanning_tree_asymmetric "SpanningTreeBound: requires a symmetric distance source")
+periple_death_test(bb_order_not_permutation "branch_and_bound: order must permute the children")
+periple_death_test(bb_pick_out_of_range "branch_and_bound: pick must return an index into the remaining children")
 
 # Each file must fail to compile with the given static_assert message.
 function(periple_compile_fail name message)
@@ -80,3 +82,5 @@ periple_compile_fail(unstaged_dimension_two_opt
     "evaluate_replay: a dimension commits AppendMove state without staging")
 periple_compile_fail(bb_no_lower_bound
     "branch_and_bound: the strategy needs lower_bound")
+periple_compile_fail(bb_no_order
+    "branch_and_bound: the order needs order")
