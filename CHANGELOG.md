@@ -10,6 +10,8 @@
 - `branch_and_bound()`: exact depth-first search through the `AppendMove` pipeline, so it honors every variant and stays exact under time windows. A complete tour held by the solver is the first to beat, `resume_at` searches the completions of a prefix, `max_nodes` and `time_limit` stop it early.
 - `branch_and_bound(bound)`: the same search with a lower bound strategy (`lower_bound`, optional `begin`). Built-in bounds: `SpanningTreeBound` for symmetric distances and `SpanningArborescenceBound` for any instance, Held-Karp Lagrangian relaxations ascended at every node and the defaults of `branch_and_bound()`; `AssignmentBound`, for costs without structure under time windows.
 - `branch_and_bound(bound, order)`: the order of the children is a strategy too, through `order` (once per node, permutes the scored children) or `pick` (before each descent, the next child), or both. `CheapestFirst` is the default. `dead_end` is what a lower bound returns for a node without a feasible completion.
+- `time_windows::DeadlineBound(tw, bound)`: a bound for `branch_and_bound` under `Strict` windows, around another bound. It prunes a node from which an unvisited city, or the return to the first, can no longer meet its deadline, even by the shortest path.
+- `Strict::windows(city)` and `Relaxed::windows(city)`: a city's windows, sorted by `earliest`.
 
 ### Breaking
 
