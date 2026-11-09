@@ -658,6 +658,25 @@ void test_tsptw_relaxed_optional_windows() {
 	assert(solver.status() == SolutionStatus::feasible);
 }
 
+// Both variants show a city's windows as stored: sorted by earliest, none for
+// a city without one.
+void test_tsptw_windows_accessor() {
+	std::vector<std::vector<time_windows::TimeWindow>> multiple = {
+		{{0, 100}},
+		{{14, 18}, {8, 12}},
+	};
+	time_windows::Strict strict(multiple);
+	time_windows::Relaxed relaxed(multiple, 1000);
+	for (const auto ws : {strict.windows(1), relaxed.windows(1)})
+		assert(ws.size() == 2 && ws[0].earliest == 8 && ws[1].earliest == 14
+			&& "windows(city) lists the city's windows sorted by earliest");
+
+	std::optional<time_windows::TimeWindow> optional[] = {std::nullopt, time_windows::TimeWindow{0, 50}};
+	time_windows::Strict some(optional);
+	assert(some.windows(0).empty() && "a city without a window has none");
+	assert(some.windows(1).size() == 1 && some.windows(1)[0].latest == 50 && "a city's single window");
+}
+
 // ---------------------------------------------------------------------------
 // Unit: neighbor lists
 // ---------------------------------------------------------------------------
@@ -786,6 +805,7 @@ int main() {
 		{"tsptw_relaxed_hk",             test_tsptw_relaxed_hk},
 		{"tsptw_strict_optional_windows", test_tsptw_strict_optional_windows},
 		{"tsptw_relaxed_optional_windows", test_tsptw_relaxed_optional_windows},
+		{"tsptw_windows_accessor",       test_tsptw_windows_accessor},
 		// Unit - neighbor lists
 		{"neighbors_basic",              test_neighbors_basic},
 		{"neighbors_grow",               test_neighbors_grow},

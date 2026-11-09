@@ -20,3 +20,4 @@
 #include <periple/algorithms/two_opt.hpp>
 #include <periple/algorithms/branch_and_bound.hpp>
 #include <periple/algorithms/branch_and_bound/assignment_bound.hpp>
+#include <periple/algorithms/branch_and_bound/deadline_bound.hpp>

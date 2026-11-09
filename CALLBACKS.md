@@ -229,6 +229,14 @@ Three built-in bounds, all computed on raw distances: a variant with negative pe
 
 `branch_and_bound()` uses `SpanningTreeBound` under `set_symmetric(true)` and `SpanningArborescenceBound` otherwise. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches, and when to pass `AssignmentBound`. Each bound has its own header, named after it, in `periple/algorithms/branch_and_bound/`; `branch_and_bound.hpp` includes the two defaults.
 
+Under `Strict` time windows, `time_windows::DeadlineBound(tw, bound)` (`deadline_bound.hpp`, same directory) wraps a bound. It returns `dead_end` for a node from which an unvisited city, or the return to the first, can no longer be reached before the last of its windows closes, even by the shortest path, and the value of `bound` otherwise. `tw` is the `Strict` of the solver's variant, held by pointer like the variant itself. The test times tours under `tw` alone: service times, or any other variant that only delays departures, leave it exact. It costs O(n^3) once, at the root, for the shortest paths, n^2 doubles, then O(n) per node.
+
+```cpp
+periple::time_windows::Strict tw(windows);
+periple::Solver solver(matrix, tw);
+solver.branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::SpanningArborescenceBound{}));
+```
+
 A complete tour held on entry is the first tour to beat. Without a variant any tour counts, rotated to `start_city`. With a variant the cost depends on the start, so the tour must start at `start_city`: call `clear()` first otherwise. `resume_at` keeps `tour[0..resume_at)` and searches its completions.
 
 | End of search | Status |
