@@ -181,10 +181,12 @@ ATSP support: **full** = native asymmetric support, **adapted** = supported with
 | Instance | Call | Measured on one core of an i5-13500 |
 |---|---|---|
 | Symmetric | `set_symmetric(true)`, then `branch_and_bound()` | Tier 1 within 3 ms, st70 in 1.5 s, kroB100 in 29 s, kroA100 unproved after 60 s |
-| Symmetric, with a variant | same | Under time windows, most instances of 20 to 40 cities within seconds; tight windows can take far longer |
+| Symmetric, under strict time windows | `set_symmetric(true)`, then `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::SpanningTreeBound{}))` | Every case measured, berlin52 and st70, within 0.48 s |
 | Asymmetric | `branch_and_bound()` | TSPLIB: ftv38 in 82 ms, ry48p in 0.16 s, ft70 in 3.0 s; p43, ftv64 and ftv70 unproved after 60 s |
-| Asymmetric, with a variant | same | Under time windows, every case measured at 20 cities within 2.0 s; at 30 and 40 cities, most stay unproved after 20 s unless the windows are loose |
-| Asymmetric, costs without structure, under time windows | `branch_and_bound(periple::AssignmentBound{})` | 30 cities in 0.27 s where `branch_and_bound()` takes 3.3 s; 40 cities in 1.3 and 2.2 s where it stops unproved at 20 s. On structured costs, keep `branch_and_bound()` |
+| Asymmetric, under strict time windows | `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::SpanningArborescenceBound{}))` | On berlin52 and st70, every case measured within 0.84 s but one, unproved after 20 s |
+| Asymmetric, costs without structure, under strict time windows | `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::AssignmentBound{}))` | On uniform random costs, every case measured within 0.19 s, where the arborescence takes up to 10 s. On berlin52 and st70, keep the arborescence: around `AssignmentBound`, 6 of the 24 cases stay unproved after 20 s |
+
+Under time windows, `tw` is the solver's `Strict` variant. The cases measured: the first 20, 30 and 40 cities of berlin52 and st70, each distance raised by up to 20% for the asymmetric ones, and asymmetric uniform random costs. Around the arrival times of a nearest-neighbor tour improved by 2-opt, each city but the first gets a window of 2, 5 or 10 mean arcs on either side, or so many that no deadline binds.
 
 A complete tour held by the solver is the first tour to beat, which cuts the search time by 12 to 61% on the Tier 2 instances proved:
 

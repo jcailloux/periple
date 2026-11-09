@@ -84,6 +84,8 @@ if (solver.status() == periple::SolutionStatus::feasible)
 
 The guard is what makes the chain safe: under a hard constraint the construction can stop early, and there is then no complete tour to improve.
 
+Under `Strict`, `time_windows::DeadlineBound` speeds up `branch_and_bound`: it drops a partial tour that can no longer meet a deadline. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives the call for your distances.
+
 ### Relaxed
 
 Soft constraint. Penalizes time window violations via `move_prepare` (adds `penalty_weight * violation` to `cost_delta`). Never rejects moves.

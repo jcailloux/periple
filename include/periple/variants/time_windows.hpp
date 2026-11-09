@@ -133,40 +133,41 @@ struct Strict {
 	// Multiple windows per city.
 	explicit Strict(std::span<const std::vector<TimeWindow>> windows) : store_(windows) {}
 
+	// A city's windows, sorted by earliest; empty for a city without one.
+	template <typename CityT>
+	[[nodiscard]] std::span<const TimeWindow> windows(CityT city) const {
+		return store_[static_cast<std::size_t>(city)];
+	}
+
 	// --- AppendMove ---
 
 	template <typename CityT, typename Ctx>
 	void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const {
-		auto ws = windows_of(m.city);
+		auto ws = windows(m.city);
 		double arr = ctx.template dim<RouteTiming>().arrival;
 		ctx.template dim<RouteTiming>().departure += detail::departure_time(ws, arr) - arr;
 	}
 
 	template <typename CityT, typename Ctx>
 	bool move_filter(const AppendMove<CityT>& m, const Ctx& ctx) const {
-		return detail::is_feasible(windows_of(m.city), ctx.template dim<RouteTiming>().arrival);
+		return detail::is_feasible(windows(m.city), ctx.template dim<RouteTiming>().arrival);
 	}
 
 	// --- DPMove ---
 
 	template <typename CityT, typename Ctx>
 	void move_prepare(const DPMove<CityT>& m, Ctx& ctx) const {
-		auto ws = windows_of(m.to);
+		auto ws = windows(m.to);
 		double arr = ctx.template dim<RouteTiming>().arrival;
 		ctx.template dim<RouteTiming>().departure += detail::departure_time(ws, arr) - arr;
 	}
 
 	template <typename CityT, typename Ctx>
 	bool move_filter(const DPMove<CityT>& m, const Ctx& ctx) const {
-		return detail::is_feasible(windows_of(m.to), ctx.template dim<RouteTiming>().arrival);
+		return detail::is_feasible(windows(m.to), ctx.template dim<RouteTiming>().arrival);
 	}
 
 private:
-	template <typename CityT>
-	std::span<const TimeWindow> windows_of(CityT city) const {
-		return store_[static_cast<std::size_t>(city)];
-	}
-
 	detail::WindowStore store_;
 };
 
@@ -186,11 +187,17 @@ struct Relaxed {
 	// Multiple windows per city.
 	Relaxed(std::span<const std::vector<TimeWindow>> windows, double penalty_weight = 1000) : store_(windows), penalty_weight_(penalty_weight) {}
 
+	// A city's windows, sorted by earliest; empty for a city without one.
+	template <typename CityT>
+	[[nodiscard]] std::span<const TimeWindow> windows(CityT city) const {
+		return store_[static_cast<std::size_t>(city)];
+	}
+
 	// --- AppendMove ---
 
 	template <typename CityT, typename Ctx>
 	void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const {
-		auto ws = windows_of(m.city);
+		auto ws = windows(m.city);
 		double arr = ctx.template dim<RouteTiming>().arrival;
 		ctx.template dim<RouteTiming>().departure += detail::departure_time(ws, arr) - arr;
 		double violation = detail::violation_amount(ws, arr);
@@ -202,7 +209,7 @@ struct Relaxed {
 
 	template <typename CityT, typename Ctx>
 	void move_prepare(const DPMove<CityT>& m, Ctx& ctx) const {
-		auto ws = windows_of(m.to);
+		auto ws = windows(m.to);
 		double arr = ctx.template dim<RouteTiming>().arrival;
 		ctx.template dim<RouteTiming>().departure += detail::departure_time(ws, arr) - arr;
 		double violation = detail::violation_amount(ws, arr);
@@ -211,11 +218,6 @@ struct Relaxed {
 	}
 
 private:
-	template <typename CityT>
-	std::span<const TimeWindow> windows_of(CityT city) const {
-		return store_[static_cast<std::size_t>(city)];
-	}
-
 	detail::WindowStore store_;
 	double penalty_weight_;
 };

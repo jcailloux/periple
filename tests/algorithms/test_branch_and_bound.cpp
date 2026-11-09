@@ -988,6 +988,278 @@ void test_limit_stops_the_order() {
 }
 
 // ---------------------------------------------------------------------------
+// Deadline bound
+// ---------------------------------------------------------------------------
+
+// Leaves every cut to the deadline test.
+struct ZeroBound {
+	template <typename Solver>
+	double lower_bound(const Solver&, double) const { return 0.0; }
+};
+
+// The default order, counting the nodes it expands.
+struct CountingOrder {
+	std::size_t* expanded;
+
+	template <typename Solver, typename Child>
+	void order(const Solver& solver, std::span<Child> children, double cutoff) const {
+		++*expanded;
+		CheapestFirst{}.order(solver, children, cutoff);
+	}
+};
+
+// The deadline test as the papers state it, recomputed from the start of the
+// tour at each node, every unvisited city and the first one checked.
+struct NaiveDeadline {
+	const time_windows::Strict* tw;
+	std::size_t n = 0;
+	std::vector<double> paths{};
+
+	template <typename Solver>
+	void begin(const Solver& solver) {
+		n = solver.size();
+		paths.resize(n * n);
+		for (std::size_t a = 0; a < n; ++a)
+			for (std::size_t b = 0; b < n; ++b) paths[a * n + b] = static_cast<double>(solver.distance(a, b));
+		for (std::size_t k = 0; k < n; ++k)
+			for (std::size_t a = 0; a < n; ++a)
+				for (std::size_t b = 0; b < n; ++b) paths[a * n + b] = std::min(paths[a * n + b], paths[a * n + k] + paths[k * n + b]);
+	}
+
+	template <typename Solver>
+	double lower_bound(const Solver& solver, double) const {
+		const auto tour = solver.tour();
+		double departure = time_windows::detail::departure_time(tw->windows(tour[0]), 0.0);
+		for (std::size_t i = 1; i < tour.size(); ++i)
+			departure = time_windows::detail::departure_time(tw->windows(tour[i]),
+				departure + static_cast<double>(solver.distance(tour[i - 1], tour[i])));
+		for (std::size_t c = 0; c < n; ++c) {
+			if (solver.is_visited(c) && c != tour.front()) continue;
+			double latest = tw->windows(c).empty() ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
+			for (const auto& w : tw->windows(c)) latest = std::max(latest, w.latest);
+			if (departure + paths[tour.back() * n + c] > latest + 1e-9 * (1.0 + std::abs(latest))) return dead_end;
+		}
+		return 0.0;
+	}
+};
+
+// What DeadlineBound(tw, ZeroBound{}) returns at the end of prefix, called at
+// each node along it as the search does; dead_end at the first node it cuts.
+template <typename Dist>
+double deadline_after(const Dist& dist, const time_windows::Strict& tw, const std::vector<std::size_t>& prefix) {
+	auto never = [] { return false; };
+	Solver solver(dist, tw);
+	solver.append(prefix[0]);
+	time_windows::DeadlineBound bound(tw, ZeroBound{});
+	bound.begin(solver, never);
+	double value = 0.0;
+	for (std::size_t k = 1; k < prefix.size() && value != dead_end; ++k) {
+		solver.append(prefix[k]);
+		value = bound.lower_bound(solver, std::numeric_limits<double>::infinity(), never);
+	}
+	return value;
+}
+
+// Each part of the test on a case made for it.
+void test_deadline_bound_cases() {
+	constexpr double open = 1e9;
+	auto tens = [](std::size_t n) {
+		std::vector<int> w(n * n, 10);
+		for (std::size_t i = 0; i < n; ++i) w[i * n + i] = 0;
+		return DistanceMatrix<int>(n, w);
+	};
+
+	// Every arc takes 10. City 1 opens at 100, city 3 closes at 115.
+	const auto five = tens(5);
+	const std::vector<time_windows::TimeWindow> waiting = {{0, open}, {100, 200}, {0, open}, {0, 115}, {0, open}};
+	const time_windows::Strict wait(waiting);
+	assert(deadline_after(five, wait, {0, 1}) != dead_end && "leaving city 1 at 100, city 3 is reached by 110");
+	assert(deadline_after(five, wait, {0, 1, 2}) == dead_end
+		&& "the wait at city 1 delays city 2's departure to 110: city 3 is reached at 120 at the earliest");
+
+	// The direct arc from city 1 to city 2 takes 100, the path through city 3 takes 20.
+	auto detour = tens(4);
+	detour(1, 2) = 100;
+	const std::vector<time_windows::TimeWindow> path_windows = {{0, open}, {0, open}, {0, 35}, {0, open}};
+	const time_windows::Strict path(path_windows);
+	assert(deadline_after(detour, path, {0, 1}) != dead_end
+		&& "through city 3, city 2 is reached by 30, before it closes at 35");
+
+	// The first city closes at 105 for the return.
+	const auto four = tens(4);
+	const std::vector<time_windows::TimeWindow> return_windows = {{0, 105}, {100, 200}, {0, open}, {0, open}};
+	const time_windows::Strict back(return_windows);
+	assert(deadline_after(four, back, {0, 1}) == dead_end && "leaving city 1 at 100, the tour returns at 110 at the earliest");
+	assert(deadline_after(four, back, {0, 2}) != dead_end && "leaving city 2 at 10, the tour can return in time");
+
+	// Only the tour 0, 1, 2, 3 reaches city 3 in time, at (0.3 + 0.2) + 0.1 = 0.6;
+	// the test adds the shortest path from city 1, 0.2 + 0.1, to 0.3, which rounds above 0.6.
+	assert((0.3 + 0.2) + 0.1 <= 0.6 && 0.3 + (0.2 + 0.1) > 0.6 && "the case rests on this rounding");
+	DistanceMatrix<double> rounding(4, std::vector<double>(16, 10.0));
+	for (std::size_t i = 0; i < 4; ++i) rounding(i, i) = 0.0;
+	rounding(0, 1) = 0.3;
+	rounding(1, 2) = 0.2;
+	rounding(2, 3) = 0.1;
+	rounding(3, 0) = 1.0;
+	const std::vector<time_windows::TimeWindow> on_time = {{0, open}, {0, open}, {0, open}, {0, 0.6}};
+	const time_windows::Strict margin(on_time);
+	assert(deadline_after(rounding, margin, {0, 1}) != dead_end && "the margin keeps a tour that arrives just on time");
+	Solver solver(rounding, margin);
+	run_checked(solver, [&] { solver.branch_and_bound(time_windows::DeadlineBound(margin, SpanningArborescenceBound{})); });
+	assert(solver.status() == SolutionStatus::optimal && solver.cost() == *pipeline_optimum(rounding, margin, {0})
+		&& "the margin keeps the only tour");
+}
+
+// Single, optional and multiple windows, service times, and deadlines at the
+// first city: the test keeps the optimum, or proves there is none. It never
+// adds a node: a subtree it cuts holds no tour, so the search finds the same
+// tours in the same order. Alone, it cuts the nodes NaiveDeadline cuts, from
+// the start city or from a longer prefix.
+void test_deadline_bound_keeps_the_optimum() {
+	Rng rng{0x2DE92C6F592B0275ull};
+	std::size_t alone_total = 0, deadline_total = 0;
+	auto check = [&](const auto& dist, const auto& variant, const time_windows::Strict& tw, bool symmetric) {
+		const auto best = pipeline_optimum(dist, variant, {0});
+		auto expands = [&](auto bound) {
+			std::size_t expanded = 0;
+			Solver solver(dist, variant);
+			if (symmetric) solver.set_symmetric(true);
+			run_checked(solver, [&] { solver.branch_and_bound(bound, CountingOrder{&expanded}); });
+			assert((best ? solver.status() == SolutionStatus::optimal && solver.cost() == *best
+			             : solver.status() == SolutionStatus::infeasible && solver.tour().empty())
+				&& "the search keeps the optimum under deadlines, or proves there is none");
+			return expanded;
+		};
+		auto compare = [&](auto inner) {
+			const std::size_t alone = expands(inner);
+			const std::size_t deadline = expands(time_windows::DeadlineBound(tw, inner));
+			assert(deadline <= alone && "the deadline test cuts only subtrees without a tour, so it never adds a node");
+			alone_total += alone;
+			deadline_total += deadline;
+		};
+		if (symmetric) {
+			compare(SpanningTreeBound{});
+		} else {
+			compare(SpanningArborescenceBound{});
+			compare(AssignmentBound{});
+		}
+		assert(expands(time_windows::DeadlineBound(tw, ZeroBound{})) == expands(NaiveDeadline{&tw})
+			&& "the deadline test cuts the nodes it cuts when recomputed from the start of the tour");
+		if (!best) return;
+		// Resumed from the start of an optimal tour: the cities of the prefix are visited.
+		Solver optimal(dist, variant);
+		optimal.branch_and_bound(time_windows::DeadlineBound(tw, ZeroBound{}));
+		const std::vector<std::size_t> prefix(optimal.tour().begin(), optimal.tour().begin() + 3);
+		auto resumed = [&](auto bound) {
+			std::size_t expanded = 0;
+			Solver solver(dist, variant);
+			solver.set_tour(prefix);
+			run_checked(solver, [&] { solver.branch_and_bound(bound, CountingOrder{&expanded}, {.resume_at = 3}); });
+			assert(solver.status() == SolutionStatus::feasible && solver.cost() == *best
+				&& "resumed from an optimal tour's start, the search finds the optimum");
+			return expanded;
+		};
+		assert(resumed(time_windows::DeadlineBound(tw, ZeroBound{})) == resumed(NaiveDeadline{&tw})
+			&& "resumed, the deadline test cuts the nodes it cuts when recomputed from the start of the tour");
+	};
+	for (std::size_t n = 4; n <= 7; ++n) {
+		for (int seed = 0; seed < 8; ++seed) {
+			const auto asym = random_asym(rng, n, 30);
+			const auto sym = random_sym(rng, n, 30);
+			// Arcs of 1 to 30, windows closing between 20 and 100: waits, and some instances without a tour.
+			std::vector<time_windows::TimeWindow> single(n);
+			std::vector<std::optional<time_windows::TimeWindow>> optional(n);
+			std::vector<std::vector<time_windows::TimeWindow>> multiple(n);
+			std::vector<double> durations(n);
+			for (std::size_t c = 0; c < n; ++c) {
+				single[c] = {static_cast<double>(rng.below(40)), static_cast<double>(20 + rng.below(80))};
+				if (rng.below(3) > 0) optional[c] = single[c];
+				for (int k = rng.below(3); k >= 0; --k) {
+					const auto start = static_cast<double>(rng.below(100));
+					multiple[c].push_back({start, start + static_cast<double>(5 + rng.below(30))});
+				}
+				durations[c] = static_cast<double>(rng.below(5));
+			}
+			// Half the seeds leave the first city open; the others close it for the return.
+			single[0] = {0.0, seed % 2 ? 1e9 : static_cast<double>(60 + rng.below(100))};
+			optional[0] = seed % 2 ? std::nullopt : std::optional(single[0]);
+			if (seed % 2) multiple[0] = {{0.0, 1e9}};
+
+			const time_windows::Strict single_tw(single);
+			const time_windows::Strict optional_tw(optional);
+			const time_windows::Strict multiple_tw(multiple);
+			const service_times::ServiceTimes services(durations);
+			const auto serviced = Composed(services, single_tw);
+			for (const bool symmetric : {false, true}) {
+				auto with = [&](const auto& variant, const time_windows::Strict& tw) {
+					if (symmetric) check(sym, variant, tw, true);
+					else check(asym, variant, tw, false);
+				};
+				with(single_tw, single_tw);
+				with(optional_tw, optional_tw);
+				with(multiple_tw, multiple_tw);
+				with(serviced, single_tw);
+			}
+		}
+	}
+	assert(deadline_total < alone_total && "the deadline test cuts nodes the bounds keep");
+}
+
+// Beyond the sizes enumeration can check: windows around a random tour, which
+// arrives on time, and the cities scanned eight at a time, with or without a
+// remainder. The test cuts the nodes NaiveDeadline cuts.
+void test_deadline_bound_matches_naive() {
+	Rng rng{0xA4506CEB65A0E2C1ull};
+	for (const std::size_t n : {9, 16, 17, 24}) {
+		for (const int half_width : {5, 10, 20}) {
+			const auto dist = random_asym(rng, n, 30);
+			std::vector<std::size_t> order(n);
+			std::iota(order.begin(), order.end(), std::size_t{0});
+			for (std::size_t i = n - 1; i > 1; --i) std::swap(order[i], order[1 + static_cast<std::size_t>(rng.below(static_cast<int>(i)))]);
+			std::vector<time_windows::TimeWindow> windows(n);
+			double t = 0;
+			for (std::size_t i = 1; i <= n; ++i) {
+				t += dist(order[i - 1], order[i % n]);
+				windows[order[i % n]] = {std::max(0.0, t - half_width), t + half_width};
+			}
+			windows[0].earliest = 0;
+			const time_windows::Strict tw(windows);
+			auto expands = [&](auto bound) {
+				std::size_t expanded = 0;
+				Solver solver(dist, tw);
+				run_checked(solver, [&] { solver.branch_and_bound(bound, CountingOrder{&expanded}); });
+				assert(solver.status() == SolutionStatus::optimal && "the tour the windows were drawn around is on time");
+				return expanded;
+			};
+			assert(expands(time_windows::DeadlineBound(tw, ZeroBound{})) == expands(NaiveDeadline{&tw})
+				&& "the deadline test cuts the nodes it cuts when recomputed from the start of the tour");
+		}
+	}
+}
+
+// The shortest paths take O(n^3) in begin: a limit stops them. Up to 20 runs,
+// as in test_limit_stops_the_bound.
+void test_deadline_bound_stops_in_begin() {
+	using namespace std::chrono;
+	Rng rng{0x3956C25BF348B538ull};
+	constexpr std::size_t n = 500;
+	const auto dist = random_asym(rng, n, 1000);
+	const std::vector<time_windows::TimeWindow> windows(n, {0.0, 1e9});
+	const time_windows::Strict tw(windows);
+	constexpr auto limit = milliseconds{1};
+	constexpr auto allowed = limit + milliseconds{4};
+	auto best = nanoseconds::max();
+	for (int run = 0; run < 20 && best >= allowed; ++run) {
+		Solver solver(dist, tw);
+		const auto start = steady_clock::now();
+		solver.branch_and_bound(time_windows::DeadlineBound(tw, ZeroBound{}), {.time_limit = limit});
+		best = std::min(best, duration_cast<nanoseconds>(steady_clock::now() - start));
+		assert(solver.status() == SolutionStatus::partial && "stopped before any tour, the search keeps its start");
+	}
+	assert(best < allowed && "a limit stops the shortest paths");
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -1015,6 +1287,10 @@ int main() {
 		{"pick_sees_the_remaining_children", test_pick_sees_the_remaining_children},
 		{"order_calls",                    test_order_calls},
 		{"limit_stops_the_order",          test_limit_stops_the_order},
+		{"deadline_bound_cases",           test_deadline_bound_cases},
+		{"deadline_bound_keeps_the_optimum", test_deadline_bound_keeps_the_optimum},
+		{"deadline_bound_matches_naive",   test_deadline_bound_matches_naive},
+		{"deadline_bound_stops_in_begin",  test_deadline_bound_stops_in_begin},
 	};
 	for (const auto& t : tests) {
 		std::printf("  %s ... ", t.name);
