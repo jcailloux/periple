@@ -500,20 +500,21 @@ void test_optimal_is_noop() {
 // ---------------------------------------------------------------------------
 
 // All distances distinct: a neighbor list does not depend on how ties are
-// broken, so any correct build gives the reference lists exactly.
-DistanceMatrix<int> distinct_asym(std::size_t n, std::uint64_t x) {
-	std::vector<int> values(n * (n - 1));
+// broken, so any correct build gives the reference lists exactly. 64-bit:
+// with arcs up to n(n-1), the cost of a tour exceeds int.
+DistanceMatrix<std::int64_t> distinct_asym(std::size_t n, std::uint64_t x) {
+	std::vector<std::int64_t> values(n * (n - 1));
 	std::iota(values.begin(), values.end(), 1);
 	for (std::size_t i = values.size() - 1; i > 0; --i) {
 		x ^= x << 13; x ^= x >> 7; x ^= x << 17;
 		std::swap(values[i], values[x % (i + 1)]);
 	}
-	std::vector<int> w(n * n, 0);
+	std::vector<std::int64_t> w(n * n, 0);
 	std::size_t v = 0;
 	for (std::size_t i = 0; i < n; ++i)
 		for (std::size_t j = 0; j < n; ++j)
 			if (i != j) w[i * n + j] = values[v++];
-	return DistanceMatrix<int>(n, w);
+	return DistanceMatrix<std::int64_t>(n, w);
 }
 
 // Checks every ready list against the reference solver; returns how many are ready.

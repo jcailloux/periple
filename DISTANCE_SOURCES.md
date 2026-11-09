@@ -2,6 +2,8 @@
 
 Periple is generic over distance sources. Any type satisfying the `DistanceSource` concept works with the `Solver` and all algorithms. The library ships several built-in sources, and you can provide your own.
 
+A tour's cost adds up in the source's `cost_type`, penalties included, so that type must hold the cost of any tour: for large integer costs, take `std::int64_t`.
+
 ## Matrix storage
 
 Precomputed distance matrices with O(1) lookups. Best for small to medium instances.
