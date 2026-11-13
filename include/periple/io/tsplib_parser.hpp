@@ -90,72 +90,83 @@ inline std::vector<double> flatten_coords(const std::vector<Coord>& coords) {
 	return flat;
 }
 
-inline SymmetricDistanceMatrix<int> build_from_coords(
-	const std::vector<double>& flat, std::size_t n, CoordDistFn dist_fn)
+// Each pair is computed or read once and written to both sides.
+inline void build_from_coords(
+	DistanceMatrix<int>& mat, const std::vector<double>& flat, CoordDistFn dist_fn)
 {
-	SymmetricDistanceMatrix<int> mat(n);
+	const std::size_t n = mat.size();
 	for (std::size_t i = 1; i < n; ++i)
-		for (std::size_t j = 0; j < i; ++j)
-			mat.set(i, j,
-				dist_fn(flat.data() + i * 2, flat.data() + j * 2));
-	return mat;
+		for (std::size_t j = 0; j < i; ++j) {
+			int v = dist_fn(flat.data() + i * 2, flat.data() + j * 2);
+			mat(i, j) = v;
+			mat(j, i) = v;
+		}
 }
 
-inline SymmetricDistanceMatrix<int> read_lower_diag_row(
-	std::istream& in, std::size_t n)
-{
-	SymmetricDistanceMatrix<int> mat(n);
+inline void read_lower_diag_row(std::istream& in, DistanceMatrix<int>& mat) {
+	const std::size_t n = mat.size();
 	for (std::size_t i = 0; i < n; ++i) {
 		for (std::size_t j = 0; j <= i; ++j) {
 			int v;
 			if (!(in >> v))
 				throw std::runtime_error(
 					"unexpected end of EDGE_WEIGHT_SECTION (LOWER_DIAG_ROW)");
-			if (i != j) mat.set(i, j, v);
+			if (i != j) {
+				mat(i, j) = v;
+				mat(j, i) = v;
+			}
 		}
 	}
-	return mat;
 }
 
-inline SymmetricDistanceMatrix<int> read_upper_row(
-	std::istream& in, std::size_t n)
-{
-	SymmetricDistanceMatrix<int> mat(n);
+inline void read_upper_row(std::istream& in, DistanceMatrix<int>& mat) {
+	const std::size_t n = mat.size();
 	for (std::size_t i = 0; i < n; ++i) {
 		for (std::size_t j = i + 1; j < n; ++j) {
 			int v;
 			if (!(in >> v))
 				throw std::runtime_error(
 					"unexpected end of EDGE_WEIGHT_SECTION (UPPER_ROW)");
-			mat.set(i, j, v);
+			mat(i, j) = v;
+			mat(j, i) = v;
 		}
 	}
-	return mat;
 }
 
-inline SymmetricDistanceMatrix<int> read_full_matrix(
-	std::istream& in, std::size_t n)
-{
-	SymmetricDistanceMatrix<int> mat(n);
+// Read whole; the diagonal stays zero (ATSP files hold a large sentinel there).
+// Unless TYPE is ATSP, the data must be symmetric.
+inline void read_full_matrix(std::istream& in, DistanceMatrix<int>& mat) {
+	const std::size_t n = mat.size();
 	for (std::size_t i = 0; i < n; ++i) {
 		for (std::size_t j = 0; j < n; ++j) {
 			int v;
 			if (!(in >> v))
 				throw std::runtime_error(
 					"unexpected end of EDGE_WEIGHT_SECTION (FULL_MATRIX)");
-			if (i > j) mat.set(i, j, v);
+			if (i != j) mat(i, j) = v;
 		}
 	}
-	return mat;
+	if (!mat.symmetric()) return;
+	for (std::size_t i = 0; i < n; ++i)
+		for (std::size_t j = i + 1; j < n; ++j)
+			if (mat(i, j) != mat(j, i))
+				throw std::runtime_error(
+					"FULL_MATRIX is asymmetric but TYPE is not ATSP: d(" +
+					std::to_string(i) + ", " + std::to_string(j) + ") = " +
+					std::to_string(mat(i, j)) + ", d(" +
+					std::to_string(j) + ", " + std::to_string(i) + ") = " +
+					std::to_string(mat(j, i)));
 }
 
-// Shared header parsing: reads DIMENSION, EDGE_WEIGHT_TYPE, EDGE_WEIGHT_FORMAT,
-// then stops at the data section keyword, returning what was found.
+// Shared header parsing: reads TYPE, DIMENSION, EDGE_WEIGHT_TYPE,
+// EDGE_WEIGHT_FORMAT, then stops at the data section keyword, returning what
+// was found.
 struct TsplibHeader {
 	std::size_t dimension = 0;
 	EdgeWeightType weight_type{};
 	EdgeWeightFormat weight_format = EdgeWeightFormat::none;
 	bool has_type = false;
+	bool symmetric = true; // any TYPE but ATSP, or none
 	enum class DataSection { node_coord, edge_weight, none } data_section = DataSection::none;
 };
 
@@ -166,7 +177,9 @@ inline TsplibHeader parse_tsplib_header(std::istream& in) {
 		line = trim(line);
 		if (line.empty()) continue;
 
-		if (line.starts_with("DIMENSION")) {
+		if (line.starts_with("TYPE")) {
+			h.symmetric = parse_value(line) != "ATSP";
+		} else if (line.starts_with("DIMENSION")) {
 			h.dimension = std::stoul(parse_value(line));
 		} else if (line.starts_with("EDGE_WEIGHT_TYPE")) {
 			h.weight_type = parse_weight_type(parse_value(line));
@@ -191,13 +204,16 @@ inline TsplibHeader parse_tsplib_header(std::istream& in) {
 	return h;
 }
 
-inline SymmetricDistanceMatrix<int> load_tsplib_matrix_impl(std::istream& in) {
+inline DistanceMatrix<int> load_tsplib_matrix_impl(std::istream& in) {
 	auto h = parse_tsplib_header(in);
+	DistanceMatrix<int> mat = h.symmetric
+		? DistanceMatrix<int>(h.dimension, symmetric)
+		: DistanceMatrix<int>(h.dimension);
 	if (h.data_section == TsplibHeader::DataSection::node_coord) {
 		auto coords = read_node_coords(in, h.dimension);
-		auto flat = flatten_coords(coords);
-		return build_from_coords(flat, h.dimension,
+		build_from_coords(mat, flatten_coords(coords),
 			coord_distance_function(h.weight_type));
+		return mat;
 	}
 	// EDGE_WEIGHT_SECTION
 	if (h.weight_format == EdgeWeightFormat::none)
@@ -205,14 +221,18 @@ inline SymmetricDistanceMatrix<int> load_tsplib_matrix_impl(std::istream& in) {
 			"EDGE_WEIGHT_FORMAT missing for EXPLICIT type");
 	switch (h.weight_format) {
 	case EdgeWeightFormat::lower_diag_row:
-		return read_lower_diag_row(in, h.dimension);
+		read_lower_diag_row(in, mat);
+		break;
 	case EdgeWeightFormat::upper_row:
-		return read_upper_row(in, h.dimension);
+		read_upper_row(in, mat);
+		break;
 	case EdgeWeightFormat::full_matrix:
-		return read_full_matrix(in, h.dimension);
+		read_full_matrix(in, mat);
+		break;
 	default:
 		throw std::runtime_error("unexpected weight format");
 	}
+	return mat;
 }
 
 // The metric of EDGE_WEIGHT_TYPE, chosen at run time; every one is symmetric.
@@ -240,17 +260,19 @@ inline TsplibCoordDist load_tsplib_coords_impl(std::istream& in) {
 
 } // namespace detail
 
-// Load a TSPLIB95 file into a precomputed SymmetricDistanceMatrix<int>.
-// Supports all EDGE_WEIGHT_TYPEs (EUC_2D, GEO, ATT, CEIL_2D, EXPLICIT).
+// Load a TSPLIB95 file into a precomputed DistanceMatrix<int>, declared
+// symmetric unless TYPE is ATSP. Supports all EDGE_WEIGHT_TYPEs (EUC_2D, GEO,
+// ATT, CEIL_2D, EXPLICIT). The diagonal is zero, whatever the file holds there.
+// Throws on a FULL_MATRIX that is asymmetric while TYPE is not ATSP.
 // Uses O(N^2) memory -- suitable for small/medium instances.
-inline SymmetricDistanceMatrix<int> load_tsplib(const std::string& filepath) {
+inline DistanceMatrix<int> load_tsplib(const std::string& filepath) {
 	std::ifstream file(filepath);
 	if (!file)
 		throw std::runtime_error("cannot open file: " + filepath);
 	return detail::load_tsplib_matrix_impl(file);
 }
 
-inline SymmetricDistanceMatrix<int> load_tsplib(std::istream& in) {
+inline DistanceMatrix<int> load_tsplib(std::istream& in) {
 	return detail::load_tsplib_matrix_impl(in);
 }
 
