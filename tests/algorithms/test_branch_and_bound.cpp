@@ -94,13 +94,11 @@ void test_bounds_match_held_karp() {
 			exact.held_karp();
 
 			Solver cold(sym);
-			cold.set_symmetric(true);
 			run_checked(cold, [&] { cold.branch_and_bound(); });
 			assert(cold.status() == SolutionStatus::optimal && cold.cost() == exact.cost()
 				&& "SpanningTreeBound must keep the optimum");
 
 			Solver warm(sym);
-			warm.set_symmetric(true);
 			warm.nearest_neighbor().two_opt();
 			run_checked(warm, [&] { warm.branch_and_bound(); });
 			assert(warm.status() == SolutionStatus::optimal && warm.cost() == exact.cost()
@@ -270,7 +268,7 @@ void test_assignment_is_minimum() {
 // Along a chain of depths, each node starting from its parent's state, with a
 // cutoff around the optimal completion, a bound never exceeds that completion.
 template <typename Dist, typename Bound>
-void check_below_completion(const Dist& dist, Bound bound, bool symmetric, Rng& rng) {
+void check_below_completion(const Dist& dist, Bound bound, Rng& rng) {
 	auto never = [] { return false; };
 	const std::size_t n = dist.size();
 	std::vector<std::size_t> order(n);
@@ -278,7 +276,6 @@ void check_below_completion(const Dist& dist, Bound bound, bool symmetric, Rng& 
 	for (std::size_t i = n - 1; i > 1; --i)
 		std::swap(order[i], order[1 + static_cast<std::size_t>(rng.below(static_cast<int>(i)))]);
 	Solver solver(dist);
-	if (symmetric) solver.set_symmetric(true);
 	solver.append(order[0]);
 	if constexpr (requires { bound.begin(solver, never); }) bound.begin(solver, never);
 	else bound.begin(solver);
@@ -298,12 +295,12 @@ void test_bounds_below_completion() {
 		for (std::size_t n = 4; n <= 8; ++n) {
 			for (int seed = 0; seed < 10; ++seed) {
 				auto asym = random_asym(rng, n, hi);
-				check_below_completion(asym, SpanningArborescenceBound{}, false, rng);
-				check_below_completion(asym, AssignmentBound{}, false, rng);
+				check_below_completion(asym, SpanningArborescenceBound{}, rng);
+				check_below_completion(asym, AssignmentBound{}, rng);
 				auto sym = random_sym(rng, n, hi);
-				check_below_completion(sym, SpanningArborescenceBound{}, false, rng);
-				check_below_completion(sym, AssignmentBound{}, false, rng);
-				check_below_completion(sym, SpanningTreeBound{}, true, rng);
+				check_below_completion(sym, SpanningArborescenceBound{}, rng);
+				check_below_completion(sym, AssignmentBound{}, rng);
+				check_below_completion(sym, SpanningTreeBound{}, rng);
 			}
 		}
 	}
@@ -319,7 +316,6 @@ void test_tsplib_optima() {
 	for (const auto& c : cases) {
 		auto mat = load_tsplib(dir + c.file);
 		Solver solver(mat);
-		solver.set_symmetric(true);
 		run_checked(solver, [&] { solver.branch_and_bound(); });
 		assert(solver.status() == SolutionStatus::optimal && solver.cost() == c.optimum
 			&& "branch_and_bound must reach the known optimum");
@@ -336,7 +332,6 @@ void test_jonker_volgenant_view() {
 
 		auto jv = jonker_volgenant(asym);
 		Solver solver(jv);
-		solver.set_symmetric(true);
 		run_checked(solver, [&] { solver.branch_and_bound(); });
 		assert(solver.status() == SolutionStatus::optimal && "the view must be solved");
 		assert(jv.atsp_cost(solver.cost()) == exact.cost() && "SpanningTreeBound must hold with negative weights");
@@ -349,7 +344,6 @@ void test_jonker_volgenant_view() {
 
 		auto jv = jonker_volgenant(asym);
 		Solver solver(jv);
-		solver.set_symmetric(true);
 		solver.branch_and_bound({.max_nodes = 1000000});
 		assert(solver.status() == SolutionStatus::optimal && "a forbidden edge must prune its branch");
 		assert(jv.atsp_cost(solver.cost()) == exact.cost() && "the view must reach the optimum");
@@ -369,7 +363,6 @@ void test_double_costs() {
 			Solver exact(m);
 			exact.held_karp();
 			Solver solver(m);
-			solver.set_symmetric(true);
 			run_checked(solver, [&] { solver.branch_and_bound(); });
 			assert(std::abs(solver.cost() - exact.cost()) < 1e-9 && "the rounding margin must not cut the optimum");
 			Solver assignment(m);
@@ -395,7 +388,6 @@ void test_symmetric_relaxed_windows() {
 				windows[c] = {static_cast<double>(rng.below(40)), static_cast<double>(20 + rng.below(80))};
 			time_windows::Relaxed variant(windows, 10);
 			Solver solver(sym, variant);
-			solver.set_symmetric(true);
 			run_checked(solver, [&] { solver.branch_and_bound(); });
 			const auto best = pipeline_optimum(sym, variant, {0});
 			assert(solver.status() == SolutionStatus::optimal && solver.cost() == *best
@@ -584,11 +576,10 @@ void test_limit_stops_the_bound() {
 	Rng rng{0x9B05688C2B3E6C1Full};
 	constexpr auto limit = milliseconds{1};
 	constexpr auto allowed = limit + milliseconds{4};
-	auto stops_in_time = [&](const auto& dist, bool symmetric, auto bound) {
+	auto stops_in_time = [&](const auto& dist, auto bound) {
 		auto best = nanoseconds::max();
 		for (int run = 0; run < 20 && best >= allowed; ++run) {
 			Solver solver(dist);
-			solver.set_symmetric(symmetric, unchecked);
 			solver.nearest_neighbor();  // a finite cutoff: the spanning bounds ascend
 			const auto start = steady_clock::now();
 			solver.branch_and_bound(bound, {.time_limit = limit});
@@ -603,16 +594,16 @@ void test_limit_stops_the_bound() {
 	const auto dist = random_sym(rng, 500, 1000);
 	SpanningTreeBound long_tree;
 	long_tree.iterations = 1000;
-	stops_in_time(dist, true, long_tree);
+	stops_in_time(dist, long_tree);
 	SpanningArborescenceBound long_arborescence;
 	long_arborescence.iterations = 1000;
-	stops_in_time(dist, false, long_arborescence);
+	stops_in_time(dist, long_arborescence);
 	constexpr std::size_t n = 400;
 	std::vector<int> products(n * n, 0);
 	for (std::size_t i = 0; i < n; ++i)
 		for (std::size_t j = 0; j < n; ++j)
 			if (i != j) products[i * n + j] = static_cast<int>(i * j) + 1;
-	stops_in_time(DistanceMatrix<int>(n, products), false, AssignmentBound{});
+	stops_in_time(DistanceMatrix<int>(n, products), AssignmentBound{});
 }
 
 // ---------------------------------------------------------------------------
@@ -1123,7 +1114,6 @@ void test_deadline_bound_keeps_the_optimum() {
 		auto expands = [&](auto bound) {
 			std::size_t expanded = 0;
 			Solver solver(dist, variant);
-			if (symmetric) solver.set_symmetric(true);
 			run_checked(solver, [&] { solver.branch_and_bound(bound, CountingOrder{&expanded}); });
 			assert((best ? solver.status() == SolutionStatus::optimal && solver.cost() == *best
 			             : solver.status() == SolutionStatus::infeasible && solver.tour().empty())

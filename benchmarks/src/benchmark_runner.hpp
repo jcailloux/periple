@@ -480,9 +480,6 @@ private:
 		r.runs = algo.runs;
 
 		periple::Solver solver(mat);
-		// Every benchmark instance is symmetric (see BENCHMARKING.md);
-		// unchecked skips the O(n^2) debug verification.
-		solver.set_symmetric(true, periple::unchecked);
 		long rss_before = peak_rss_kb();
 
 		if (algo.runs > 1) {
@@ -559,7 +556,6 @@ private:
 		r.runs = algo.runs;
 
 		periple::Solver solver(cd);
-		solver.set_symmetric(true, periple::unchecked);
 		long rss_before = peak_rss_kb();
 
 		if (algo.runs > 1) {

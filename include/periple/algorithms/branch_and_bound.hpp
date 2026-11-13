@@ -1,8 +1,8 @@
 #pragma once
 
-// Branch and bound with the default bound: SpanningTreeBound under
-// set_symmetric(true), SpanningArborescenceBound otherwise. The search and the
-// other strategies have their own headers in branch_and_bound/.
+// Branch and bound with the default bound: SpanningTreeBound when symmetric(),
+// SpanningArborescenceBound otherwise. The search and the other strategies
+// have their own headers in branch_and_bound/.
 
 #include <periple/algorithms/branch_and_bound/spanning_arborescence_bound.hpp>
 #include <periple/algorithms/branch_and_bound/spanning_tree_bound.hpp>

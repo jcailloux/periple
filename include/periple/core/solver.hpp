@@ -111,6 +111,10 @@ public:
 	// arrival times and penalties. Useful after two_opt() in symmetric mode,
 	// which treats the tour as a cycle and does not preserve its first city.
 	void rotate_to_front(city_type city);
+
+	// Overrides the source's declaration (its symmetric(), asymmetric without
+	// one) until the next set_matrix. true is checked in debug builds, unless
+	// unchecked or the source type guarantees it.
 	void set_symmetric(bool sym);
 	void set_symmetric(bool sym, unchecked_t);
 
@@ -317,6 +321,7 @@ void Solver<Dist, Variant>::set_matrix(const Dist& dist) {
 	++tour_version_;
 	ctx_.reset();
 	invalidate_caches();
+	symmetric_ = detail::declares_symmetry(dist);
 	if (symmetric_) check_symmetry();
 }
 
@@ -373,12 +378,14 @@ auto Solver<Dist, Variant>::symmetric() const -> bool {
 
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::set_symmetric(bool sym) {
+	assert(dist_ && "set_symmetric: no distance source yet, and set_matrix replaces the declaration with the source's");
 	symmetric_ = sym;
-	if (sym && dist_) check_symmetry();
+	if (sym) check_symmetry();
 }
 
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::set_symmetric(bool sym, unchecked_t) {
+	assert(dist_ && "set_symmetric: no distance source yet, and set_matrix replaces the declaration with the source's");
 	symmetric_ = sym;
 }
 
@@ -532,9 +539,10 @@ void Solver<Dist, Variant>::invalidate_caches() {
 	neighbors_built_ = 0;
 }
 
+// Debug check of a declaration the source type does not guarantee.
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::check_symmetry() const {
-	assert([&] {
+	if constexpr (!detail::symmetric_by_type<Dist>) assert([&] {
 		const auto n = dist_->size();
 		constexpr std::size_t max_print = 5;
 		std::size_t count = 0;
@@ -547,8 +555,8 @@ void Solver<Dist, Variant>::check_symmetry() const {
 				if (dij != dji) {
 					if (count == 0)
 						detail::log(
-							"set_symmetric(true) but distance"
-							" matrix has violations:\n");
+							"symmetry declared but the distance"
+							" source has violations:\n");
 					if (count < max_print)
 						detail::log(
 							"  d(%zu, %zu) = %g,"
@@ -561,7 +569,7 @@ void Solver<Dist, Variant>::check_symmetry() const {
 		if (count > max_print)
 			detail::log("  ... and %zu more\n", count - max_print);
 		return count == 0;
-	}());
+	}() && "check_symmetry: the source or set_symmetric(true) declares symmetry, but d(i, j) != d(j, i) for some pair");
 }
 
 template <DistanceSource Dist, typename Variant>
