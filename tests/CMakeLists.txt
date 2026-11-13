@@ -57,6 +57,7 @@ periple_death_test(bb_held_tour_elsewhere "branch_and_bound: with a variant, a h
 periple_death_test(bb_spanning_tree_asymmetric "SpanningTreeBound: requires a symmetric distance source")
 periple_death_test(bb_order_not_permutation "branch_and_bound: order must permute the children")
 periple_death_test(bb_pick_out_of_range "branch_and_bound: pick must return an index into the remaining children")
+periple_death_test(symmetric_tag_asymmetric "check_symmetry: the source or set_symmetric\\(true\\) declares symmetry")
 
 # Each file must fail to compile with the given static_assert message.
 function(periple_compile_fail name message)

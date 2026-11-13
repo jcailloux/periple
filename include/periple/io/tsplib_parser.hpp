@@ -215,7 +215,16 @@ inline SymmetricDistanceMatrix<int> load_tsplib_matrix_impl(std::istream& in) {
 	}
 }
 
-using TsplibCoordDist = CoordinateDistance<CoordDistFn>;
+// The metric of EDGE_WEIGHT_TYPE, chosen at run time; every one is symmetric.
+struct TsplibMetric {
+	CoordDistFn fn;
+
+	static constexpr bool symmetric() { return true; }
+
+	int operator()(const double* a, const double* b) const { return fn(a, b); }
+};
+
+using TsplibCoordDist = CoordinateDistance<TsplibMetric>;
 
 inline TsplibCoordDist load_tsplib_coords_impl(std::istream& in) {
 	auto h = parse_tsplib_header(in);
@@ -226,7 +235,7 @@ inline TsplibCoordDist load_tsplib_coords_impl(std::istream& in) {
 	auto coords = read_node_coords(in, h.dimension);
 	return TsplibCoordDist(
 		2, flatten_coords(coords),
-		coord_distance_function(h.weight_type));
+		TsplibMetric{coord_distance_function(h.weight_type)});
 }
 
 } // namespace detail

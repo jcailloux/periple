@@ -136,27 +136,27 @@ int main() {
 	solver.set_tour(other);
 	assert(solver.path_cost(0, 2) == 2 + 40 && "path_cost: a new tour invalidates the prefixes");
 
-	// --- symmetric ---
+	// --- symmetric: declared by the source, overridden by set_symmetric ---
 	solver.set_matrix(mat);
-	assert(!solver.symmetric());
+	assert(!solver.symmetric() && "an untagged matrix is asymmetric, even with symmetric data");
 
-	// set_symmetric(true) on a symmetric matrix succeeds.
-	solver.set_matrix(mat);
-	solver.set_symmetric(true);
-	assert(solver.symmetric());
+	periple::DistanceMatrix<int> tagged(3, {0, 1, 2, 1, 0, 3, 2, 3, 0}, periple::symmetric);
+	solver.set_matrix(tagged);
+	assert(solver.symmetric() && "the solver takes the source's declaration");
 
-	// set_symmetric(false) clears the flag.
 	solver.set_symmetric(false);
-	assert(!solver.symmetric());
+	assert(!solver.symmetric() && "set_symmetric(false) overrides a symmetric source");
+	solver.set_matrix(tagged);
+	assert(solver.symmetric() && "set_matrix replaces the override with the source's declaration");
 
-	// set_matrix preserves symmetric flag; re-checks in debug.
-	solver.set_symmetric(true);
-	solver.set_matrix(mat2);  // mat2 is also symmetric
-	assert(solver.symmetric());
+	solver.set_matrix(mat);
+	solver.set_symmetric(true);  // symmetric data: the debug check passes
+	assert(solver.symmetric() && "set_symmetric(true) overrides an asymmetric source");
+	solver.set_matrix(mat2);
+	assert(!solver.symmetric() && "set_matrix replaces the override with the source's declaration");
 
 	// unchecked bypasses the debug check.
 	periple::DistanceMatrix<int> asym(3, {0, 1, 2, 3, 0, 4, 5, 6, 0});
-	solver.set_symmetric(false);
 	solver.set_matrix(asym);
 	solver.set_symmetric(true, periple::unchecked);
 	assert(solver.symmetric());
@@ -164,4 +164,26 @@ int main() {
 	// reset clears symmetric flag.
 	solver.reset();
 	assert(!solver.symmetric());
+
+	// --- Shipped sources declare their symmetry ---
+	periple::SymmetricDistanceMatrix<int> lower(std::vector<std::vector<int>>{{0, 4}, {4, 0}});
+	assert(periple::Solver(lower).symmetric() && "a SymmetricDistanceMatrix is symmetric");
+	assert(periple::Solver(periple::jonker_volgenant(asym)).symmetric() && "the Jonker-Volgenant view is symmetric");
+
+	const std::vector<std::pair<double, double>> points = {{0, 0}, {3, 4}, {6, 0}};
+	assert(periple::Solver(periple::CoordinateDistance(points, periple::euclidean<int>(2))).symmetric()
+		&& "a shipped metric declares the coordinate source symmetric");
+	assert(periple::Solver(periple::CoordinateDistance(points, periple::ceiling_euclidean<int>(2))).symmetric()
+		&& "a shipped metric declares the coordinate source symmetric");
+	assert(periple::Solver(periple::CoordinateDistance(points, periple::manhattan<int>(2))).symmetric()
+		&& "a shipped metric declares the coordinate source symmetric");
+	assert(periple::Solver(periple::CoordinateDistance(points, periple::chebyshev<int>(2))).symmetric()
+		&& "a shipped metric declares the coordinate source symmetric");
+	auto sum_of_x = [](const double* a, const double* b) { return static_cast<int>(a[0] + b[0]); };
+	periple::CoordinateDistance custom(points, sum_of_x);
+	assert(!periple::Solver(custom).symmetric() && "a custom function leaves the coordinate source asymmetric");
+	static_assert(!periple::detail::static_symmetry<decltype(custom)>,
+		"a custom function declares nothing");
+	static_assert(periple::detail::symmetric_by_type<periple::CoordinateDistance<periple::Euclidean<int>, int>>,
+		"a shipped metric makes the coordinate source symmetric by its type");
 }

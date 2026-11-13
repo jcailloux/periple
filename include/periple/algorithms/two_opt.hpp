@@ -8,12 +8,12 @@
 //
 // First-improvement search over neighbor lists, driven by a queue of active
 // cities. Three evaluation modes, chosen once per call:
-//   symmetric  -- NoCallbacks + set_symmetric(true). O(1) delta with the
+//   symmetric  -- NoCallbacks, symmetric() true. O(1) delta with the
 //                 classic gain criterion. Moves may wrap around the tour start
 //                 and the shorter side is reversed, which caps a move at n/2
 //                 swaps but does not preserve the first city (cycle
 //                 semantics); rotate_to_front() restores a chosen one.
-//   asymmetric -- NoCallbacks, symmetry not declared. The inner edges of the
+//   asymmetric -- NoCallbacks, symmetric() false. The inner edges of the
 //                 reversed segment change direction; their cost in both
 //                 directions comes from path_fwd_/path_bwd_, so the delta is
 //                 still O(1), at the price of an O(n - i) prefix rebuild per

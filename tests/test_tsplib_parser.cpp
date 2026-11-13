@@ -290,12 +290,16 @@ void test_solver_integration() {
 
 	auto mat = periple::load_tsplib(path);
 	periple::Solver solver_mat(mat);
+	assert(solver_mat.symmetric() && "a TSP instance loads as a symmetric source");
 	solver_mat.nearest_neighbor();
 	assert(solver_mat.cost() > 0);
 	assert(solver_mat.tour().size() == 14);
 
 	auto cd = periple::load_tsplib_coords(path);
 	periple::Solver solver_cd(cd);
+	assert(solver_cd.symmetric() && "a TSPLIB metric declares the coordinate source symmetric");
+	static_assert(periple::detail::symmetric_by_type<periple::detail::TsplibCoordDist>,
+		"every TSPLIB metric is symmetric, whichever EDGE_WEIGHT_TYPE picks");
 	solver_cd.nearest_neighbor();
 	assert(solver_cd.cost() == solver_mat.cost());
 }

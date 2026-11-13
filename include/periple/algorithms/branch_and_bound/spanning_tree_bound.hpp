@@ -46,7 +46,7 @@ struct SpanningTreeBound {
 
 	template <DistanceSource Dist, typename Variant>
 	void begin(const Solver<Dist, Variant>& solver) {
-		assert(solver.symmetric() && "SpanningTreeBound: requires a symmetric distance source (set_symmetric(true))");
+		assert(solver.symmetric() && "SpanningTreeBound: requires a symmetric distance source (declared by the source, or set_symmetric(true))");
 		n_ = solver.size();
 		pi_.assign(n_, {});
 		pi_[solver.tour().size()].assign(n_, 0.0);  // the root's: every other row copies its parent's

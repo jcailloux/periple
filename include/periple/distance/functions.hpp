@@ -8,21 +8,26 @@ namespace periple {
 
 // ---------------------------------------------------------------------------
 // Generic distance function factories.
-// Each takes a dimension and returns a callable compatible with
-// CoordinateDistance: CostT fn(const double* a, const double* b).
+// Each takes a dimension and returns a metric compatible with
+// CoordinateDistance: CostT fn(const double* a, const double* b). Every metric
+// declares itself symmetric at compile time, and so does the source built on it.
 //
 // CostT controls the return type:
 //   - floating-point (double, float): exact distance, no rounding
 //   - integral (int, long, ...):      rounded to nearest integer
 //
 // Usage:
-//   CoordinateDistance cd(n, 3, coords, periple::euclidean<double>(3));
+//   CoordinateDistance cd(3, coords, periple::euclidean<double>(3));
 // ---------------------------------------------------------------------------
 
 // L2 norm: sqrt(sum (a_i - b_i)^2)
 template <typename CostT = double>
-auto euclidean(std::size_t dim) {
-	return [dim](const double* a, const double* b) -> CostT {
+struct Euclidean {
+	std::size_t dim;
+
+	static constexpr bool symmetric() { return true; }
+
+	CostT operator()(const double* a, const double* b) const {
 		double sum = 0;
 		for (std::size_t k = 0; k < dim; ++k) {
 			double d = a[k] - b[k];
@@ -33,26 +38,40 @@ auto euclidean(std::size_t dim) {
 			return static_cast<CostT>(std::round(dist));
 		else
 			return static_cast<CostT>(dist);
-	};
-}
+	}
+};
+
+template <typename CostT = double>
+Euclidean<CostT> euclidean(std::size_t dim) { return {dim}; }
 
 // L2 norm with ceiling: ceil(sqrt(sum (a_i - b_i)^2))
 template <typename CostT = double>
-auto ceiling_euclidean(std::size_t dim) {
-	return [dim](const double* a, const double* b) -> CostT {
+struct CeilingEuclidean {
+	std::size_t dim;
+
+	static constexpr bool symmetric() { return true; }
+
+	CostT operator()(const double* a, const double* b) const {
 		double sum = 0;
 		for (std::size_t k = 0; k < dim; ++k) {
 			double d = a[k] - b[k];
 			sum += d * d;
 		}
 		return static_cast<CostT>(std::ceil(std::sqrt(sum)));
-	};
-}
+	}
+};
+
+template <typename CostT = double>
+CeilingEuclidean<CostT> ceiling_euclidean(std::size_t dim) { return {dim}; }
 
 // L1 norm: sum |a_i - b_i|
 template <typename CostT = double>
-auto manhattan(std::size_t dim) {
-	return [dim](const double* a, const double* b) -> CostT {
+struct Manhattan {
+	std::size_t dim;
+
+	static constexpr bool symmetric() { return true; }
+
+	CostT operator()(const double* a, const double* b) const {
 		double sum = 0;
 		for (std::size_t k = 0; k < dim; ++k)
 			sum += std::abs(a[k] - b[k]);
@@ -60,13 +79,20 @@ auto manhattan(std::size_t dim) {
 			return static_cast<CostT>(std::round(sum));
 		else
 			return static_cast<CostT>(sum);
-	};
-}
+	}
+};
+
+template <typename CostT = double>
+Manhattan<CostT> manhattan(std::size_t dim) { return {dim}; }
 
 // L-infinity norm: max |a_i - b_i|
 template <typename CostT = double>
-auto chebyshev(std::size_t dim) {
-	return [dim](const double* a, const double* b) -> CostT {
+struct Chebyshev {
+	std::size_t dim;
+
+	static constexpr bool symmetric() { return true; }
+
+	CostT operator()(const double* a, const double* b) const {
 		double mx = 0;
 		for (std::size_t k = 0; k < dim; ++k) {
 			double d = std::abs(a[k] - b[k]);
@@ -76,8 +102,11 @@ auto chebyshev(std::size_t dim) {
 			return static_cast<CostT>(std::round(mx));
 		else
 			return static_cast<CostT>(mx);
-	};
-}
+	}
+};
+
+template <typename CostT = double>
+Chebyshev<CostT> chebyshev(std::size_t dim) { return {dim}; }
 
 // ---------------------------------------------------------------------------
 // TSPLIB95-specific distance functions.
@@ -125,8 +154,11 @@ inline int geo(const double* a, const double* b) {
 	constexpr double rrr = 6378.388;
 	double lat1 = detail::geo_to_radians(a[0]), lon1 = detail::geo_to_radians(a[1]);
 	double lat2 = detail::geo_to_radians(b[0]), lon2 = detail::geo_to_radians(b[1]);
-	double q1 = std::cos(lon1 - lon2);
-	double q2 = std::cos(lat1 - lat2);
+	// cos is even, but std::cos does not promise equal results for x and -x.
+	// Under the default rounding a - b and b - a are exact opposites, so abs
+	// makes d(a, b) == d(b, a).
+	double q1 = std::cos(std::abs(lon1 - lon2));
+	double q2 = std::cos(std::abs(lat1 - lat2));
 	double q3 = std::cos(lat1 + lat2);
 	return static_cast<int>(
 		rrr * std::acos(0.5 * ((1.0 + q1) * q2 - (1.0 - q1) * q3)) + 1.0);

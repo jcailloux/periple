@@ -190,7 +190,6 @@ bool tour_respects_windows(const Dist& dist, std::span<const std::size_t> tour,
 void test_symmetric_improves() {
 	auto m = random_sym(30, 1);
 	Solver solver(m);
-	solver.set_symmetric(true);
 	solver.nearest_neighbor();
 	const auto nn_cost = solver.cost();
 
@@ -204,7 +203,6 @@ void test_symmetric_improves() {
 void test_symmetric_two_optimal() {
 	auto m = random_sym(30, 2);
 	Solver solver(m);
-	solver.set_symmetric(true);
 	solver.nearest_neighbor();
 	run_two_opt(solver, {.neighbors = 0});
 
@@ -217,7 +215,6 @@ void test_symmetric_two_optimal() {
 void test_repeated_call_stable() {
 	auto m = random_sym(30, 3);
 	Solver solver(m);
-	solver.set_symmetric(true);
 	solver.nearest_neighbor();
 	run_two_opt(solver);
 
@@ -234,7 +231,6 @@ void test_repeated_call_stable() {
 void test_max_moves_one() {
 	auto m = random_sym(30, 4);
 	Solver capped(m);
-	capped.set_symmetric(true);
 	capped.nearest_neighbor();
 	const auto nn_cost = capped.cost();
 	run_two_opt(capped, {.max_moves = 1});
@@ -244,7 +240,6 @@ void test_max_moves_one() {
 	assert(capped.cost() == recompute_cost(m, capped.tour()) && "cost must stay exact");
 
 	Solver full(m);
-	full.set_symmetric(true);
 	full.nearest_neighbor();
 	run_two_opt(full);
 	assert(capped.cost() >= full.cost() && "one move cannot beat the full descent");
@@ -256,7 +251,6 @@ void test_set_tour_then_two_opt() {
 	std::iota(identity.begin(), identity.end(), std::size_t{0});
 
 	Solver solver(m);
-	solver.set_symmetric(true);
 	solver.set_tour(identity);
 	const auto start = solver.cost();
 	run_two_opt(solver, {.neighbors = 0});
@@ -272,7 +266,6 @@ void test_matrix_switch() {
 	auto m2 = random_sym(12, 7);
 
 	Solver solver(m1);
-	solver.set_symmetric(true);
 	solver.nearest_neighbor();
 	run_two_opt(solver);
 	solver.set_matrix(m2);
@@ -285,12 +278,13 @@ void test_matrix_switch() {
 }
 
 // ---------------------------------------------------------------------------
-// Directed modes (NoCallbacks without declared symmetry, and asymmetric)
+// Directed modes (NoCallbacks with symmetric() false: forced, or asymmetric)
 // ---------------------------------------------------------------------------
 
-void test_undeclared_symmetry() {
+void test_forced_directed() {
 	auto m = random_sym(12, 8);
-	Solver solver(m);  // symmetry not declared: directed mode on symmetric data
+	Solver solver(m);
+	solver.set_symmetric(false);  // directed mode on symmetric data
 	solver.nearest_neighbor();
 	two_opt_to_fixed_point(solver);
 
@@ -464,7 +458,6 @@ void test_trivial_sizes() {
 	for (std::size_t n = 0; n <= 3; ++n) {
 		auto m = random_sym(n, 15);
 		Solver solver(m);
-		solver.set_symmetric(true);
 		solver.nearest_neighbor();
 
 		std::vector<std::size_t> tour(solver.tour().begin(), solver.tour().end());
@@ -481,7 +474,6 @@ void test_trivial_sizes() {
 void test_optimal_is_noop() {
 	auto m = random_sym(6, 16);
 	Solver solver(m);
-	solver.set_symmetric(true);
 	solver.held_karp();
 
 	std::vector<std::size_t> tour(solver.tour().begin(), solver.tour().end());
@@ -608,7 +600,7 @@ int main() {
 		{"set_tour_then_two_opt",        test_set_tour_then_two_opt},
 		{"matrix_switch",                test_matrix_switch},
 		// Directed modes
-		{"undeclared_symmetry",          test_undeclared_symmetry},
+		{"forced_directed",              test_forced_directed},
 		{"asymmetric_two_optimal",       test_asymmetric_two_optimal},
 		{"directed_candidate_optimal",   test_directed_candidate_optimal},
 		{"path_costs_versioning",        test_path_costs_versioning},
