@@ -189,7 +189,7 @@ inline long peak_rss_kb() {
 // Algorithm registration
 // ---------------------------------------------------------------------------
 
-using MatrixDist = periple::SymmetricDistanceMatrix<int>;
+using MatrixDist = periple::DistanceMatrix<int>;
 using CoordDist  = periple::detail::TsplibCoordDist;
 
 struct AlgorithmEntry {

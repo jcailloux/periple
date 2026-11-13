@@ -30,6 +30,8 @@ void validate_matrix(const Instance& inst) {
 	}
 	assert(mat.size() == inst.expected_n);
 
+	assert(mat.symmetric() && "a TYPE: TSP instance loads declared symmetric");
+
 	std::size_t n = mat.size();
 	for (std::size_t i = 0; i < n; ++i)
 		assert(mat(i, i) == 0);
@@ -305,8 +307,82 @@ void test_solver_integration() {
 }
 
 // ---------------------------------------------------------------------------
+// Explicit formats and TYPE: the matrix and its declared symmetry
+// ---------------------------------------------------------------------------
+
+// The same symmetric instance in each explicit format; FULL_MATRIX carries a
+// nonzero diagonal.
+void test_explicit_formats() {
+	const char* sections[][2] = {
+		{"LOWER_DIAG_ROW", "0\n10 0\n15 20 0\n"},
+		{"UPPER_ROW",      "10 15\n20\n"},
+		{"FULL_MATRIX",    "7 10 15\n10 7 20\n15 20 7\n"},
+	};
+	const int expected[3][3] = {{0, 10, 15}, {10, 0, 20}, {15, 20, 0}};
+	for (const auto& [format, weights] : sections) {
+		std::istringstream in(
+			std::string("TYPE : TSP\nDIMENSION : 3\nEDGE_WEIGHT_TYPE : EXPLICIT\n")
+			+ "EDGE_WEIGHT_FORMAT : " + format + "\nEDGE_WEIGHT_SECTION\n" + weights);
+		auto mat = periple::load_tsplib(in);
+		assert(mat.symmetric() && "TYPE: TSP declares the matrix symmetric");
+		for (std::size_t i = 0; i < 3; ++i)
+			for (std::size_t j = 0; j < 3; ++j)
+				assert(mat(i, j) == expected[i][j] && "each format fills both sides and a zero diagonal");
+	}
+}
+
+// An ATSP keeps both directions and is declared asymmetric.
+void test_atsp_full_matrix() {
+	std::istringstream in(
+		"TYPE: ATSP\n"
+		"DIMENSION: 3\n"
+		"EDGE_WEIGHT_TYPE: EXPLICIT\n"
+		"EDGE_WEIGHT_FORMAT: FULL_MATRIX\n"
+		"EDGE_WEIGHT_SECTION\n"
+		"9999 1 9\n"
+		"9 9999 1\n"
+		"1 9 9999\n");
+	auto mat = periple::load_tsplib(in);
+	assert(!mat.symmetric() && "TYPE: ATSP leaves the matrix asymmetric");
+	const int expected[3][3] = {{0, 1, 9}, {9, 0, 1}, {1, 9, 0}};
+	for (std::size_t i = 0; i < 3; ++i)
+		for (std::size_t j = 0; j < 3; ++j)
+			assert(mat(i, j) == expected[i][j] && "an ATSP keeps both directions and a zero diagonal");
+}
+
+void test_missing_type() {
+	std::istringstream in(
+		"DIMENSION: 2\n"
+		"EDGE_WEIGHT_TYPE: EUC_2D\n"
+		"NODE_COORD_SECTION\n"
+		"1 0.0 0.0\n"
+		"2 3.0 4.0\n");
+	auto mat = periple::load_tsplib(in);
+	assert(mat.symmetric() && "a file without TYPE loads symmetric");
+	assert(mat(0, 1) == 5 && mat(1, 0) == 5 && "coordinates fill both sides");
+}
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
+
+// Raised in every build, like the other format errors.
+void test_tsp_full_matrix_asymmetric() {
+	std::istringstream in(
+		"TYPE: TSP\n"
+		"DIMENSION: 3\n"
+		"EDGE_WEIGHT_TYPE: EXPLICIT\n"
+		"EDGE_WEIGHT_FORMAT: FULL_MATRIX\n"
+		"EDGE_WEIGHT_SECTION\n"
+		"0 1 9\n"
+		"9 0 1\n"
+		"1 9 0\n");
+	std::string message;
+	try { periple::load_tsplib(in); }
+	catch (const std::runtime_error& e) { message = e.what(); }
+	assert(message.find("d(0, 1) = 1, d(1, 0) = 9") != std::string::npos
+		&& "an asymmetric FULL_MATRIX under TYPE: TSP throws, naming the first pair");
+}
 
 void test_missing_dimension() {
 	std::istringstream in(
@@ -374,6 +450,10 @@ int main() {
 	test_distance_functions();
 	test_instances();
 	test_solver_integration();
+	test_explicit_formats();
+	test_atsp_full_matrix();
+	test_missing_type();
+	test_tsp_full_matrix_asymmetric();
 	test_missing_dimension();
 	test_unsupported_type();
 	test_missing_format_for_explicit();
