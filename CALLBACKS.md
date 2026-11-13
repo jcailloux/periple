@@ -227,7 +227,7 @@ Three built-in bounds, all computed on raw distances: a variant with negative pe
 | `SpanningArborescenceBound` | any | up to its member `iterations` (default 30) minimum arborescences over the remaining cities, O(n^2) each |
 | `AssignmentBound` | any | at most two shortest augmenting paths, O(n^2) each; O(n^3) once, at the root |
 
-`branch_and_bound()` uses `SpanningTreeBound` under `set_symmetric(true)` and `SpanningArborescenceBound` otherwise. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches, and when to pass `AssignmentBound`. Each bound has its own header, named after it, in `periple/algorithms/branch_and_bound/`; `branch_and_bound.hpp` includes the two defaults.
+`branch_and_bound()` uses `SpanningTreeBound` on distances declared symmetric ([Symmetry](DISTANCE_SOURCES.md#symmetry)) and `SpanningArborescenceBound` otherwise. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches, and when to pass `AssignmentBound`. Each bound has its own header, named after it, in `periple/algorithms/branch_and_bound/`; `branch_and_bound.hpp` includes the two defaults.
 
 Under `Strict` time windows, `time_windows::DeadlineBound(tw, bound)` (`deadline_bound.hpp`, same directory) wraps a bound. It returns `dead_end` for a node from which an unvisited city, or the return to the first, can no longer be reached before the last of its windows closes, even by the shortest path, and the value of `bound` otherwise. `tw` is the `Strict` of the solver's variant, held by pointer like the variant itself. The test times tours under `tw` alone: service times, or any other variant that only delays departures, leave it exact. It costs O(n^3) once, at the root, for the shortest paths, n^2 doubles, then O(n) per node.
 
@@ -331,15 +331,7 @@ bool improve_once(Solver& solver) {
 
 ## Variant callbacks and symmetry
 
-`set_symmetric` declares the symmetry of the distances. In debug builds, `set_symmetric(true)` asserts it on the distance source. Use `set_symmetric(true, periple::unchecked)` to skip this check.
-
-A variant can make a tour's cost depend on its direction even on symmetric distances (e.g., time windows). The algorithms account for this themselves: with a variant, `two_opt` replays every candidate, and the bound of `branch_and_bound` reads distances alone. Declare symmetric distances as such, variant or not:
-
-```cpp
-solver.set_symmetric(true);                       // symmetric distances
-solver.set_symmetric(false);                      // asymmetric distances (default)
-solver.set_symmetric(true, periple::unchecked);   // trust me, skip check
-```
+The solver's `symmetric()` describes the distances alone, as the source declares them ([Symmetry](DISTANCE_SOURCES.md#symmetry)), variant or not. A variant can make a tour's cost depend on its direction even on symmetric distances (e.g., time windows). The algorithms account for this themselves: with a variant, `two_opt` replays every candidate, and the bound of `branch_and_bound` reads distances alone.
 
 ## Applicability
 
