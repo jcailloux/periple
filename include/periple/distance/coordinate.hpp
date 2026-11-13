@@ -91,6 +91,12 @@ public:
 	[[nodiscard]] std::size_t size() const { return n_; }
 	[[nodiscard]] std::size_t dim() const { return dim_; }
 
+	// Declared by a distance function that declares it at compile time, as the
+	// shipped metrics do; with any other function the source is asymmetric.
+	[[nodiscard]] static constexpr bool symmetric() requires detail::static_symmetry<DistFunc> {
+		return DistFunc::symmetric();
+	}
+
 	[[nodiscard]] const double* point(city_type i) const {
 		return coords_.data() + static_cast<std::size_t>(i) * dim_;
 	}

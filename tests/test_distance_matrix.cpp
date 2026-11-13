@@ -58,6 +58,19 @@ int main() {
 	m5(0, 1) = 42;
 	assert(m5(0, 1) == 42);
 
+	// Symmetry: declared by the trailing tag only, whatever the data
+	assert(!m2.symmetric() && "an untagged matrix is asymmetric");
+	periple::DistanceMatrix<int> t1(2, periple::symmetric);
+	assert(t1.symmetric() && t1.size() == 2 && t1(0, 1) == 0 && "the tag keeps the zero-filled constructor");
+	periple::DistanceMatrix<int> t2(3, {0, 10, 15, 10, 0, 20, 15, 20, 0}, periple::symmetric);
+	assert(t2.symmetric() && t2(2, 1) == 20 && "the tag keeps the initializer list constructor");
+	periple::DistanceMatrix<int> t3(3, flat, periple::symmetric);
+	assert(t3.symmetric() && t3(2, 0) == 15 && "the tag keeps the flat vector constructor");
+	periple::DistanceMatrix<int> t4(rows, periple::symmetric);
+	assert(t4.symmetric() && t4(0, 2) == 15 && "the tag keeps the rows constructor");
+	static_assert(!periple::detail::static_symmetry<periple::DistanceMatrix<int>>,
+		"a DistanceMatrix declares symmetry from its data, at run time");
+
 	// --- SymmetricDistanceMatrix default constructor ---
 	periple::SymmetricDistanceMatrix<int> s0;
 	assert(s0.size() == 0);
@@ -91,4 +104,6 @@ int main() {
 	static_assert(periple::DistanceSource<periple::DistanceMatrix<double>>);
 	static_assert(periple::DistanceSource<periple::SymmetricDistanceMatrix<int>>);
 	static_assert(periple::DistanceSource<periple::SymmetricDistanceMatrix<double>>);
+	static_assert(periple::detail::symmetric_by_type<periple::SymmetricDistanceMatrix<int>>,
+		"a SymmetricDistanceMatrix is symmetric by its type");
 }

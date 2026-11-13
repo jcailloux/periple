@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstddef>
 #include <initializer_list>
+#include <utility>
 #include <vector>
 
 namespace periple {
@@ -39,6 +40,19 @@ public:
 		}
 	}
 
+	// Declared symmetric by the trailing tag. A solver checks it in debug builds
+	// when it receives the matrix; writes made after that are not checked.
+	DistanceMatrix(std::size_t n, symmetric_t) : DistanceMatrix(n) { symmetric_ = true; }
+
+	DistanceMatrix(std::size_t n, std::initializer_list<cost_type> values, symmetric_t)
+		: DistanceMatrix(n, values) { symmetric_ = true; }
+
+	DistanceMatrix(std::size_t n, std::vector<cost_type> values, symmetric_t)
+		: DistanceMatrix(n, std::move(values)) { symmetric_ = true; }
+
+	DistanceMatrix(const std::vector<std::vector<cost_type>>& rows, symmetric_t)
+		: DistanceMatrix(rows) { symmetric_ = true; }
+
 	[[nodiscard]] cost_type operator()(city_type i, city_type j) const {
 		return data_[static_cast<std::size_t>(i) * n_
 			+ static_cast<std::size_t>(j)];
@@ -50,10 +64,12 @@ public:
 	}
 
 	[[nodiscard]] std::size_t size() const { return n_; }
+	[[nodiscard]] bool symmetric() const { return symmetric_; }
 
 private:
 	std::size_t n_ = 0;
 	std::vector<cost_type> data_;
+	bool symmetric_ = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -102,6 +118,7 @@ public:
 	}
 
 	[[nodiscard]] std::size_t size() const { return n_; }
+	[[nodiscard]] static constexpr bool symmetric() { return true; }
 
 private:
 	// Strict lower triangle index: row > col

@@ -5,7 +5,8 @@
 // Deduced once per call from the solver itself, never configurable: a wrong
 // mode gives a wrong cost, not a slower run. A variant forces replay, because
 // its penalties depend on the traversal order; without one, the symmetric path
-// is taken only when the caller declared the matrix symmetric (set_symmetric).
+// is taken only when the solver's symmetric() is true: declared by the source,
+// or forced by set_symmetric.
 //
 // Lives outside the algorithm headers because it parameterizes private member
 // templates of Solver, whose type must be complete before the class.

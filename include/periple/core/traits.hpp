@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <type_traits>
 
 namespace periple {
 
@@ -26,5 +27,32 @@ concept DistanceSource = requires(
 	{ d(i, i) } -> std::convertible_to<typename dist_traits<Dist>::cost_type>;
 	{ d.size() } -> std::convertible_to<std::size_t>;
 };
+
+// A source declares symmetry, d(i, j) == d(j, i) for every pair, with
+// symmetric(): static constexpr when its type guarantees it, a member when its
+// data decide. Without one it is asymmetric.
+
+// Tag declaring a DistanceMatrix symmetric: DistanceMatrix m(n, data, periple::symmetric).
+struct symmetric_t {};
+inline constexpr symmetric_t symmetric{};
+
+namespace detail {
+
+// symmetric() is a constant expression: the type decides, whatever the data.
+template <typename Dist>
+concept static_symmetry = requires { typename std::bool_constant<Dist::symmetric()>; };
+
+template <typename Dist>
+concept symmetric_by_type = static_symmetry<Dist> && Dist::symmetric();
+
+template <typename Dist>
+constexpr bool declares_symmetry(const Dist& dist) {
+	if constexpr (requires { { dist.symmetric() } -> std::convertible_to<bool>; })
+		return dist.symmetric();
+	else
+		return false;
+}
+
+} // namespace detail
 
 } // namespace periple

@@ -59,6 +59,7 @@ public:
 	}
 
 	[[nodiscard]] std::size_t size() const { return 2 * n_; }
+	[[nodiscard]] static constexpr bool symmetric() { return true; }
 
 	[[nodiscard]] std::size_t original_size() const { return n_; }
 
