@@ -94,7 +94,7 @@ periple::Solver solver(dist);
 solver.nearest_neighbor();
 ```
 
-`load_tsplib` returns a precomputed `SymmetricDistanceMatrix<int>` with O(1) lookups. It handles all supported TSPLIB formats: EUC_2D, GEO, ATT, CEIL_2D, EXPLICIT (LOWER_DIAG_ROW, UPPER_ROW, FULL_MATRIX).
+`load_tsplib` returns a precomputed `DistanceMatrix<int>` with O(1) lookups, declared symmetric unless the file's `TYPE` is `ATSP`. It handles all supported TSPLIB formats: EUC_2D, GEO, ATT, CEIL_2D, EXPLICIT (LOWER_DIAG_ROW, UPPER_ROW, FULL_MATRIX).
 
 > [!TIP]
 > For very large instances (N > 10000) where the O(N^2) matrix would exceed available memory, `load_tsplib_coords` returns a `CoordinateDistance` that computes distances on the fly with O(N) storage:
@@ -122,12 +122,12 @@ Algorithm methods return `Solver&` for chaining:
 solver.nearest_neighbor().two_opt();
 ```
 
-`two_opt()` improves a complete tour by reversing segments. Declaring symmetry
-lets it search the full cycle neighborhood and reverse the shorter side, which
-is both faster and stronger than the directed search used otherwise:
+`two_opt()` improves a complete tour by reversing segments. On distances
+declared symmetric ([Symmetry](DISTANCE_SOURCES.md#symmetry)), it searches the
+full cycle neighborhood and reverses the shorter side, which is both faster and
+stronger than the directed search used otherwise:
 
 ```cpp
-solver.set_symmetric(true);
 solver.nearest_neighbor().two_opt({.neighbors = 10});
 ```
 
@@ -176,12 +176,12 @@ ATSP support: **full** = native asymmetric support, **adapted** = supported with
 
 ### Choosing an exact solver
 
-`branch_and_bound` has no size limit and is exact under every variant with non-negative penalties, including [time windows, where `held_karp` may not be](VARIANTS.md#time-windows-tsptw). Without a variant it outruns `held_karp` beyond a dozen cities: 5 ms against 4.7 s on 24 random asymmetric cities. Its speed depends on its bound, so declare what holds:
+`branch_and_bound` has no size limit and is exact under every variant with non-negative penalties, including [time windows, where `held_karp` may not be](VARIANTS.md#time-windows-tsptw). Without a variant it outruns `held_karp` beyond a dozen cities: 5 ms against 4.7 s on 24 random asymmetric cities. Its speed depends on its bound, by default the one that fits the declared symmetry ([Symmetry](DISTANCE_SOURCES.md#symmetry)):
 
 | Instance | Call | Measured on one core of an i5-13500 |
 |---|---|---|
-| Symmetric | `set_symmetric(true)`, then `branch_and_bound()` | Tier 1 within 3 ms, st70 in 1.5 s, kroB100 in 29 s, kroA100 unproved after 60 s |
-| Symmetric, under strict time windows | `set_symmetric(true)`, then `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::SpanningTreeBound{}))` | Every case measured, berlin52 and st70, within 0.48 s |
+| Symmetric | `branch_and_bound()` | Tier 1 within 3 ms, st70 in 1.5 s, kroB100 in 29 s, kroA100 unproved after 60 s |
+| Symmetric, under strict time windows | `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::SpanningTreeBound{}))` | Every case measured, berlin52 and st70, within 0.48 s |
 | Asymmetric | `branch_and_bound()` | TSPLIB: ftv38 in 82 ms, ry48p in 0.16 s, ft70 in 3.0 s; p43, ftv64 and ftv70 unproved after 60 s |
 | Asymmetric, under strict time windows | `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::SpanningArborescenceBound{}))` | On berlin52 and st70, every case measured within 0.84 s but one, unproved after 20 s |
 | Asymmetric, costs without structure, under strict time windows | `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::AssignmentBound{}))` | On uniform random costs, every case measured within 0.19 s, where the arborescence takes up to 10 s. On berlin52 and st70, keep the arborescence: around `AssignmentBound`, 6 of the 24 cases stay unproved after 20 s |
@@ -191,7 +191,6 @@ Under time windows, `tw` is the solver's `Strict` variant. The cases measured: t
 A complete tour held by the solver is the first tour to beat, which cuts the search time by 12 to 61% on the Tier 2 instances proved:
 
 ```cpp
-solver.set_symmetric(true);
 solver.nearest_neighbor().two_opt().branch_and_bound({.time_limit = std::chrono::seconds(10)});
 ```
 
@@ -291,13 +290,13 @@ The `Solver` works with any type satisfying the `DistanceSource` concept. Peripl
 
 | Source | Memory | Best for |
 |---|---|---|
-| `DistanceMatrix<T>` | O(N^2) | Small/medium instances, asymmetric distances |
+| `DistanceMatrix<T>` | O(N^2) | Small/medium instances, any distances; `periple::symmetric` declares symmetric ones |
 | `SymmetricDistanceMatrix<T>` | O(N^2/2) | Symmetric instances (half the memory) |
 | `CoordinateDistance` | O(N*D) | Large instances, on-the-fly computation |
 
 Built-in distance functions (`euclidean`, `manhattan`, `chebyshev`, `ceiling_euclidean`) and TSPLIB-specific formulas are provided. Custom distance sources and custom distance functions (lambdas) are supported.
 
-See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, distance functions, Jonker-Volgenant asymmetric TSP support, and custom distance source examples.
+See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, symmetry declaration, distance functions, Jonker-Volgenant asymmetric TSP support, and custom distance source examples.
 
 <details>
 <summary><b>API reference</b></summary>
@@ -311,8 +310,8 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 | `Solver()` | Create an empty solver (requires explicit template parameter) |
 | `set_matrix(dist)` | Bind (or rebind) to a distance source, clearing any solution |
 | `set_variant(v)` | Set or change the variant |
-| `set_symmetric(bool)` | Declare whether the distances are symmetric (default: `false`). Checked in debug |
-| `set_symmetric(bool, unchecked)` | Same, but skips the debug symmetry check on the distance matrix |
+| `set_symmetric(bool)` | Override the source's symmetry declaration until the next `set_matrix`. `true` is checked in debug |
+| `set_symmetric(bool, unchecked)` | Same, without the debug check |
 | `clear()` | Clear the current solution, keep the distance source |
 | `reset()` | Reset to default-constructed state |
 
@@ -324,7 +323,7 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, dis
 | `tour()` | `span<const city_type>` | Zero-copy view of the current tour |
 | `cost()` | `cost_type` | Cost of the current tour |
 | `size()` | `std::size_t` | Number of cities |
-| `symmetric()` | `bool` | Whether the distances are declared symmetric |
+| `symmetric()` | `bool` | Whether the distances are declared symmetric, by the source or `set_symmetric` |
 | `set_tour(span)` | `void` | Inject a tour (full or partial prefix) |
 | `rotate_to_front(city)` | `void` | Rotate a complete tour so `city` comes first, at equal cost |
 

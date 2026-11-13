@@ -12,6 +12,8 @@
 - `branch_and_bound(bound, order)`: the order of the children is a strategy too, through `order` (once per node, permutes the scored children) or `pick` (before each descent, the next child), or both. `CheapestFirst` is the default. `dead_end` is what a lower bound returns for a node without a feasible completion.
 - `time_windows::DeadlineBound(tw, bound)`: a bound for `branch_and_bound` under `Strict` windows, around another bound. It prunes a node from which an unvisited city, or the return to the first, can no longer meet its deadline, even by the shortest path.
 - `Strict::windows(city)` and `Relaxed::windows(city)`: a city's windows, sorted by `earliest`.
+- A distance source declares its symmetry with `symmetric()`, and the solver takes that declaration; `set_symmetric` overrides it. `SymmetricDistanceMatrix`, `jonker_volgenant()`, `CoordinateDistance` with a generic metric and the TSPLIB loaders declare it.
+- `DistanceMatrix` takes a trailing `periple::symmetric` to declare it symmetric, checked in debug builds when a solver receives it.
 
 ### Breaking
 
@@ -19,6 +21,9 @@
 - A variant with callbacks must handle `AppendMove`, and `held_karp` requires every variant component and dimension to handle `DPMove`. A variant that would be ignored now fails to compile instead.
 - `ctx.tour()` and `ctx.position()` fail an assert during a replay and during `held_karp`, where they used to return an empty span and an unrelated tour.
 - A dimension that commits state on `AppendMove` must provide staging (`begin_staging`, `discard_staging`, `save_staging`, `commit_staging`) to be used with `two_opt` or any replay, so that a rejected candidate leaves the committed tour's state intact.
+- `load_tsplib` returns a `DistanceMatrix<int>`, declared symmetric unless the file's `TYPE` is `ATSP`, instead of a `SymmetricDistanceMatrix<int>`: about twice the memory. Code that names the type changes; `auto` does not.
+- `two_opt` takes its symmetric mode on every source declared symmetric, where it needed `set_symmetric(true)`: the tour found can differ, its first city too (`rotate_to_front` puts it back). `set_symmetric(false)` keeps the directed search.
+- `set_matrix` replaces a `set_symmetric` override with the new source's declaration, where it kept the override. `set_symmetric` requires a source, asserted in debug builds: call it after `set_matrix`.
 
 ### Fixed
 
@@ -26,6 +31,7 @@
 - The custom dimension example in VARIANTS.md read its position from `ctx.tour()`, which is empty during a replay, did not stage its state, and called an undefined `demand()`.
 - `jonker_volgenant()`: forbidden edges cost `big_m` instead of the largest value of the cost type, which overflowed integer costs under `branch_and_bound` and directed `two_opt`.
 - The README documented a tour cost function and variant arguments on algorithm methods that do not exist. A variant is set on the solver: `Solver(dist, variant)` or `set_variant`.
+- `load_tsplib` reads a `FULL_MATRIX` whole: it kept the lower triangle, so an ATSP instance loaded wrong, without error. Under another `TYPE`, asymmetric `FULL_MATRIX` data throw `std::runtime_error` instead of losing their upper triangle.
 
 ### Known issues
 
