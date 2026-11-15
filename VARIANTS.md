@@ -8,7 +8,7 @@ Variants encode problem-specific constraints as callback structs. They plug into
 #include <periple/variants/service_times.hpp>
 ```
 
-Adds per-city service durations to the departure time. Uses the `RouteTiming` dimension.
+Adds per-city service durations to the departure time. Durations are nonnegative, checked in debug builds. Uses the `RouteTiming` dimension.
 
 ```cpp
 double durations[] = {0, 5, 3, 2};  // service time at each city
@@ -83,8 +83,6 @@ if (solver.status() == periple::SolutionStatus::feasible)
 ```
 
 The guard is what makes the chain safe: under a hard constraint the construction can stop early, and there is then no complete tour to improve.
-
-Under `Strict`, `time_windows::DeadlineBound` speeds up `branch_and_bound`: it drops a partial tour that can no longer meet a deadline. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives the call for your distances.
 
 ### Relaxed
 
