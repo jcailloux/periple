@@ -15,6 +15,8 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 using namespace periple;
@@ -1034,14 +1036,14 @@ struct NaiveDeadline {
 	}
 };
 
-// What DeadlineBound(tw, ZeroBound{}) returns at the end of prefix, called at
-// each node along it as the search does; dead_end at the first node it cuts.
+// What DeadlineBound(ZeroBound{}) returns at the end of prefix under tw, called
+// at each node along it as the search does; dead_end at the first node it cuts.
 template <typename Dist>
 double deadline_after(const Dist& dist, const time_windows::Strict& tw, const std::vector<std::size_t>& prefix) {
 	auto never = [] { return false; };
 	Solver solver(dist, tw);
 	solver.append(prefix[0]);
-	time_windows::DeadlineBound bound(tw, ZeroBound{});
+	time_windows::DeadlineBound bound(ZeroBound{});
 	bound.begin(solver, never);
 	double value = 0.0;
 	for (std::size_t k = 1; k < prefix.size() && value != dead_end; ++k) {
@@ -1096,7 +1098,7 @@ void test_deadline_bound_cases() {
 	const time_windows::Strict margin(on_time);
 	assert(deadline_after(rounding, margin, {0, 1}) != dead_end && "the margin keeps a tour that arrives just on time");
 	Solver solver(rounding, margin);
-	run_checked(solver, [&] { solver.branch_and_bound(time_windows::DeadlineBound(margin, SpanningArborescenceBound{})); });
+	run_checked(solver, [&] { solver.branch_and_bound(time_windows::DeadlineBound(SpanningArborescenceBound{})); });
 	assert(solver.status() == SolutionStatus::optimal && solver.cost() == *pipeline_optimum(rounding, margin, {0})
 		&& "the margin keeps the only tour");
 }
@@ -1122,7 +1124,7 @@ void test_deadline_bound_keeps_the_optimum() {
 		};
 		auto compare = [&](auto inner) {
 			const std::size_t alone = expands(inner);
-			const std::size_t deadline = expands(time_windows::DeadlineBound(tw, inner));
+			const std::size_t deadline = expands(time_windows::DeadlineBound(inner));
 			assert(deadline <= alone && "the deadline test cuts only subtrees without a tour, so it never adds a node");
 			alone_total += alone;
 			deadline_total += deadline;
@@ -1133,12 +1135,12 @@ void test_deadline_bound_keeps_the_optimum() {
 			compare(SpanningArborescenceBound{});
 			compare(AssignmentBound{});
 		}
-		assert(expands(time_windows::DeadlineBound(tw, ZeroBound{})) == expands(NaiveDeadline{&tw})
+		assert(expands(time_windows::DeadlineBound(ZeroBound{})) == expands(NaiveDeadline{&tw})
 			&& "the deadline test cuts the nodes it cuts when recomputed from the start of the tour");
 		if (!best) return;
 		// Resumed from the start of an optimal tour: the cities of the prefix are visited.
 		Solver optimal(dist, variant);
-		optimal.branch_and_bound(time_windows::DeadlineBound(tw, ZeroBound{}));
+		optimal.branch_and_bound(time_windows::DeadlineBound(ZeroBound{}));
 		const std::vector<std::size_t> prefix(optimal.tour().begin(), optimal.tour().begin() + 3);
 		auto resumed = [&](auto bound) {
 			std::size_t expanded = 0;
@@ -1149,7 +1151,7 @@ void test_deadline_bound_keeps_the_optimum() {
 				&& "resumed from an optimal tour's start, the search finds the optimum");
 			return expanded;
 		};
-		assert(resumed(time_windows::DeadlineBound(tw, ZeroBound{})) == resumed(NaiveDeadline{&tw})
+		assert(resumed(time_windows::DeadlineBound(ZeroBound{})) == resumed(NaiveDeadline{&tw})
 			&& "resumed, the deadline test cuts the nodes it cuts when recomputed from the start of the tour");
 	};
 	for (std::size_t n = 4; n <= 7; ++n) {
@@ -1221,7 +1223,7 @@ void test_deadline_bound_matches_naive() {
 				assert(solver.status() == SolutionStatus::optimal && "the tour the windows were drawn around is on time");
 				return expanded;
 			};
-			assert(expands(time_windows::DeadlineBound(tw, ZeroBound{})) == expands(NaiveDeadline{&tw})
+			assert(expands(time_windows::DeadlineBound(ZeroBound{})) == expands(NaiveDeadline{&tw})
 				&& "the deadline test cuts the nodes it cuts when recomputed from the start of the tour");
 		}
 	}
@@ -1242,11 +1244,156 @@ void test_deadline_bound_stops_in_begin() {
 	for (int run = 0; run < 20 && best >= allowed; ++run) {
 		Solver solver(dist, tw);
 		const auto start = steady_clock::now();
-		solver.branch_and_bound(time_windows::DeadlineBound(tw, ZeroBound{}), {.time_limit = limit});
+		solver.branch_and_bound(time_windows::DeadlineBound(ZeroBound{}), {.time_limit = limit});
 		best = std::min(best, duration_cast<nanoseconds>(steady_clock::now() - start));
 		assert(solver.status() == SolutionStatus::partial && "stopped before any tour, the search keeps its start");
 	}
 	assert(best < allowed && "a limit stops the shortest paths");
+}
+
+// ---------------------------------------------------------------------------
+// The default bound
+// ---------------------------------------------------------------------------
+
+// A variant of the user's that makes times earlier: leaving city c takes cut[c]
+// off the departure, as a faster road would.
+struct Shortcut {
+	using dimension = RouteTiming;
+	std::vector<double> cut;
+
+	template <typename CityT, typename Ctx>
+	void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const {
+		ctx.template dim<RouteTiming>().departure -= cut[static_cast<std::size_t>(m.city)];
+	}
+};
+
+template <typename Variant, typename Bound>
+constexpr bool default_tests_deadlines =
+	std::is_same_v<decltype(detail::default_bound<Variant>(Bound{})), time_windows::DeadlineBound<Bound>>;
+
+template <typename Variant, typename Bound>
+constexpr bool default_runs_alone = std::is_same_v<decltype(detail::default_bound<Variant>(Bound{})), Bound>;
+
+static_assert(default_runs_alone<NoCallbacks, SpanningTreeBound>
+	&& default_runs_alone<service_times::ServiceTimes, SpanningTreeBound>
+	&& default_runs_alone<time_windows::Relaxed, SpanningArborescenceBound>,
+	"without a Strict, branch_and_bound() runs the default bound alone");
+static_assert(default_tests_deadlines<time_windows::Strict, SpanningTreeBound>
+	&& default_tests_deadlines<time_windows::Strict, SpanningArborescenceBound>,
+	"under Strict, branch_and_bound() runs the deadline test around the default bound");
+static_assert(default_tests_deadlines<Composed<service_times::ServiceTimes, time_windows::Strict>, SpanningArborescenceBound>
+	&& default_tests_deadlines<Composed<time_windows::Strict, time_windows::Relaxed>, SpanningArborescenceBound>
+	&& default_tests_deadlines<Composed<Composed<service_times::ServiceTimes, time_windows::Strict>, time_windows::Relaxed>, SpanningTreeBound>,
+	"composed with shipped variants, nested too, a Strict brings the deadline test");
+static_assert(default_runs_alone<Composed<time_windows::Strict, time_windows::Strict>, SpanningArborescenceBound>
+	&& default_runs_alone<Composed<Composed<service_times::ServiceTimes, time_windows::Strict>, time_windows::Strict>, SpanningTreeBound>,
+	"the deadline test reads one Strict: under two, the default bound runs alone");
+static_assert(default_runs_alone<Composed<Shortcut, time_windows::Strict>, SpanningArborescenceBound>
+	&& default_runs_alone<Composed<Composed<service_times::ServiceTimes, Shortcut>, time_windows::Strict>, SpanningTreeBound>,
+	"a variant of the user's could make a time earlier: the default bound runs alone");
+
+// The nodes a search appends before it ends, as the smallest max_nodes under
+// which it does: branch_and_bound() takes no order to count them with.
+template <typename Dist, typename Variant, typename Run>
+std::size_t nodes_to_end(const Dist& dist, const Variant& variant, Run run) {
+	auto ends = [&](std::size_t max_nodes) {
+		Solver solver(dist, variant);
+		run_checked(solver, [&] { run(solver, BranchAndBoundParams{.max_nodes = max_nodes}); });
+		return solver.status() == SolutionStatus::optimal || solver.status() == SolutionStatus::infeasible;
+	};
+	std::size_t lo = 1, hi = 1;
+	for (; !ends(hi); hi *= 2) lo = hi + 1;
+	while (lo < hi) {
+		const std::size_t mid = lo + (hi - lo) / 2;
+		if (ends(mid)) hi = mid;
+		else lo = mid + 1;
+	}
+	return lo;
+}
+
+// Under one Strict, alone or composed with shipped variants, branch_and_bound()
+// appends the nodes of the deadline test around the default bound. Under two
+// Strict, or a Shortcut, it appends those of the default bound alone. It keeps
+// the optimum throughout, which the deadline test, blind to the shortcuts, can cut.
+void test_default_bound_under_windows() {
+	Rng rng{0x1F83D9ABFB41BD6Bull};
+	std::size_t alone_total = 0, deadline_total = 0, cut_optima = 0;
+	// branch_and_bound() keeps the optimum, or proves there is none; its nodes, then those of inner alone.
+	auto facade_and_alone = [](const auto& dist, const auto& variant, auto inner) {
+		using Inner = decltype(inner);
+		const auto best = pipeline_optimum(dist, variant, {0});
+		Solver solver(dist, variant);
+		run_checked(solver, [&] { solver.branch_and_bound(); });
+		assert((best ? solver.status() == SolutionStatus::optimal && solver.cost() == *best
+		             : solver.status() == SolutionStatus::infeasible)
+			&& "branch_and_bound() keeps the optimum under windows, or proves there is none");
+		return std::pair{
+			nodes_to_end(dist, variant, [](auto& s, BranchAndBoundParams p) { s.branch_and_bound(p); }),
+			nodes_to_end(dist, variant, [](auto& s, BranchAndBoundParams p) { s.branch_and_bound(Inner{}, p); })};
+	};
+	auto tested = [&](const auto& dist, const auto& variant, auto inner) {
+		using Inner = decltype(inner);
+		const auto [facade, alone] = facade_and_alone(dist, variant, inner);
+		const auto deadline = nodes_to_end(dist, variant,
+			[](auto& s, BranchAndBoundParams p) { s.branch_and_bound(time_windows::DeadlineBound(Inner{}), p); });
+		assert(facade == deadline && "under one Strict and shipped variants, branch_and_bound() runs the deadline test");
+		alone_total += alone;
+		deadline_total += deadline;
+	};
+	auto untested = [&](const auto& dist, const auto& variant, auto inner) {
+		const auto [facade, alone] = facade_and_alone(dist, variant, inner);
+		assert(facade == alone && "under two Strict or a variant of the user's, branch_and_bound() runs the default bound alone");
+	};
+	auto cuts_an_optimum = [](const auto& dist, const auto& variant, auto inner) {
+		const auto best = pipeline_optimum(dist, variant, {0});
+		Solver solver(dist, variant);
+		solver.branch_and_bound(time_windows::DeadlineBound(inner));
+		return best && (solver.status() != SolutionStatus::optimal || solver.cost() != *best);
+	};
+	for (std::size_t n = 4; n <= 7; ++n) {
+		for (int seed = 0; seed < 5; ++seed) {
+			const auto asym = random_asym(rng, n, 30);
+			const auto sym = random_sym(rng, n, 30);
+			// Arcs of 1 to 30, windows closing between 20 and 100, as in test_deadline_bound_keeps_the_optimum.
+			std::vector<time_windows::TimeWindow> single(n);
+			std::vector<std::vector<time_windows::TimeWindow>> multiple(n);
+			std::vector<double> durations(n), cut(n);
+			for (std::size_t c = 0; c < n; ++c) {
+				single[c] = {static_cast<double>(rng.below(40)), static_cast<double>(20 + rng.below(80))};
+				for (int k = rng.below(3); k >= 0; --k) {
+					const auto start = static_cast<double>(rng.below(100));
+					multiple[c].push_back({start, start + static_cast<double>(5 + rng.below(30))});
+				}
+				durations[c] = static_cast<double>(rng.below(5));
+				cut[c] = static_cast<double>(rng.below(20));
+			}
+			single[0] = {0.0, 1e9};
+			multiple[0] = {{0.0, 1e9}};
+
+			const time_windows::Strict tw(single);
+			const time_windows::Strict tw2(multiple);
+			const time_windows::Relaxed relaxed(multiple, 10);
+			const service_times::ServiceTimes services(durations);
+			const Shortcut shortcut{cut};
+			const auto serviced = Composed(services, tw);
+			const auto penalized = Composed(tw, relaxed);
+			const auto both = Composed(tw, tw2);
+			const auto shortened = Composed(shortcut, tw);
+			tested(asym, tw, SpanningArborescenceBound{});
+			tested(sym, tw, SpanningTreeBound{});
+			tested(asym, serviced, SpanningArborescenceBound{});
+			tested(sym, serviced, SpanningTreeBound{});
+			tested(asym, penalized, SpanningArborescenceBound{});
+			tested(sym, penalized, SpanningTreeBound{});
+			untested(asym, both, SpanningArborescenceBound{});
+			untested(asym, shortened, SpanningArborescenceBound{});
+			untested(sym, shortened, SpanningTreeBound{});
+			cut_optima += cuts_an_optimum(asym, shortened, SpanningArborescenceBound{});
+			cut_optima += cuts_an_optimum(sym, shortened, SpanningTreeBound{});
+		}
+	}
+	assert(deadline_total < alone_total && "the deadline test cuts nodes the default bounds keep, so the counts tell them apart");
+	assert(cut_optima > 0 && "blind to the shortcuts, the deadline test cuts an optimum that branch_and_bound() keeps");
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,6 +1428,7 @@ int main() {
 		{"deadline_bound_keeps_the_optimum", test_deadline_bound_keeps_the_optimum},
 		{"deadline_bound_matches_naive",   test_deadline_bound_matches_naive},
 		{"deadline_bound_stops_in_begin",  test_deadline_bound_stops_in_begin},
+		{"default_bound_under_windows",    test_default_bound_under_windows},
 	};
 	for (const auto& t : tests) {
 		std::printf("  %s ... ", t.name);
