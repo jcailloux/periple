@@ -98,6 +98,18 @@ concept stages_state = requires(D& d, std::size_t i) {
 	d.commit_staging(i);
 };
 
+// A dimension that commits DP state must store it at the move's indices.
+template <typename D, typename CityT, typename Ctx>
+concept commits_dp_state =
+	requires(D& d, const DPMove<CityT>& m) { d.commit(m); } ||
+	requires(D& d, const DPMove<CityT>& m, Ctx& ctx) { d.commit(m, ctx); };
+
+template <typename D>
+concept stores_dp_state = requires(D& d, std::size_t s) {
+	d.resize_dp(s);
+	d.begin_dp(s);
+};
+
 // A dimension takes part in Move when it initializes or commits state for it.
 template <typename D, typename Move, typename Dist, typename Ctx>
 concept dimension_handles_move =
@@ -154,6 +166,9 @@ struct EmptyContext {
 	void save_staging(std::size_t) {}
 	void commit_staging(std::size_t) {}
 	[[nodiscard]] bool staging_active() const { return false; }
+
+	void resize_dp(std::size_t) {}
+	void begin_dp(std::size_t) {}
 
 	template <typename Move, typename Dist>
 	static constexpr bool dims_handle = true;
@@ -283,6 +298,28 @@ struct EvalContext {
 				else
 					return false;
 			}(ds)) || ...);
+		}, dims_);
+	}
+
+	// --- DP state storage (dispatched to dimensions that keep DP state) ---
+
+	void resize_dp(std::size_t states) {
+		std::apply([states](auto&... ds) {
+			(([]<typename D>(D& d, std::size_t s) {
+				static_assert(detail::stores_dp_state<D> || !detail::commits_dp_state<D, CityT, EvalContext>,
+					"dimension commits DPMove state without resize_dp/begin_dp: store it at DPMove::from_state/to_state");
+				if constexpr (detail::stores_dp_state<D>)
+					d.resize_dp(s);
+			}(ds, states)), ...);
+		}, dims_);
+	}
+
+	void begin_dp(std::size_t state) {
+		std::apply([state](auto&... ds) {
+			(([]<typename D>(D& d, std::size_t s) {
+				if constexpr (detail::stores_dp_state<D>)
+					d.begin_dp(s);
+			}(ds, state)), ...);
 		}, dims_);
 	}
 

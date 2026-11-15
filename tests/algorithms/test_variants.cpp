@@ -537,6 +537,24 @@ void run_shipped_variants() {
 	}
 }
 
+// A solver reused across instances must size its dimensions' DP state per run.
+template <typename Algo>
+void test_strict_set_matrix(const Algo& algo) {
+	auto small = make_sym4();
+	auto large = make_sym5();
+	std::vector<time_windows::TimeWindow> windows(large.size(), {0.0, 1000.0});
+	time_windows::Strict tw{std::span<const time_windows::TimeWindow>(windows)};
+
+	Solver solver(small, tw);
+	run_checked(solver, [&] { algo(solver); });
+	solver.set_matrix(large);
+	run_checked(solver, [&] { algo(solver); });
+
+	Solver fresh(large, tw);
+	algo(fresh);
+	assert(solver.cost() == fresh.cost() && "a reused solver must match a fresh one after set_matrix");
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -605,5 +623,10 @@ int main() {
 	std::printf("shipped_variants ... ");
 	std::fflush(stdout);
 	run_shipped_variants();
+	std::printf("OK\n");
+
+	std::printf("tsptw_strict_set_matrix ... ");
+	std::fflush(stdout);
+	for_each_algorithm(nullptr, [](const auto& algo) { test_strict_set_matrix(algo); });
 	std::printf("OK\n");
 }
