@@ -72,6 +72,11 @@ public:
 		return {s_.neighbors_.data() + c * s_.neighbors_k_, k};
 	}
 
+	// Visited sets that ReachableSets created in its last run.
+	[[nodiscard]] std::size_t hk_slots() const {
+		return s_.hk_states_cache_ ? s_.hk_states_cache_->masks.size() : 0;
+	}
+
 private:
 	const Solver<Dist, Variant>& s_;
 };

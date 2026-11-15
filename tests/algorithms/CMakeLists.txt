@@ -16,6 +16,12 @@ target_compile_definitions(test_two_opt PRIVATE PERIPLE_TESTING)
 target_include_directories(test_two_opt PRIVATE ${CMAKE_SOURCE_DIR}/tests)
 add_test(NAME two_opt COMMAND test_two_opt)
 
+add_executable(test_held_karp test_held_karp.cpp)
+target_link_libraries(test_held_karp PRIVATE periple::periple)
+target_compile_definitions(test_held_karp PRIVATE PERIPLE_TESTING)
+target_include_directories(test_held_karp PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+add_test(NAME held_karp COMMAND test_held_karp)
+
 add_executable(test_held_karp_time_windows test_held_karp_time_windows.cpp)
 target_link_libraries(test_held_karp_time_windows PRIVATE periple::periple)
 add_test(NAME held_karp_time_windows COMMAND test_held_karp_time_windows)
