@@ -12,6 +12,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 namespace periple::time_windows {
@@ -223,3 +224,12 @@ private:
 };
 
 } // namespace periple::time_windows
+
+namespace periple::detail {
+
+// Both wait for a window to open, and time_windows::detail::departure_time
+// never returns less than the arrival.
+template <> struct only_delays<time_windows::Strict> : std::true_type {};
+template <> struct only_delays<time_windows::Relaxed> : std::true_type {};
+
+} // namespace periple::detail

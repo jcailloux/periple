@@ -58,6 +58,7 @@ periple_death_test(bb_spanning_tree_asymmetric "SpanningTreeBound: requires a sy
 periple_death_test(bb_order_not_permutation "branch_and_bound: order must permute the children")
 periple_death_test(bb_pick_out_of_range "branch_and_bound: pick must return an index into the remaining children")
 periple_death_test(symmetric_tag_asymmetric "check_symmetry: the source or set_symmetric\\(true\\) declares symmetry")
+periple_death_test(service_times_negative "ServiceTimes: every service time must be a nonnegative duration")
 
 # Each file must fail to compile with the given static_assert message.
 function(periple_compile_fail name message)
@@ -85,6 +86,10 @@ periple_compile_fail(bb_no_lower_bound
     "branch_and_bound: the strategy needs lower_bound")
 periple_compile_fail(bb_no_order
     "branch_and_bound: the order needs order")
+periple_compile_fail(deadline_bound_no_strict
+    "DeadlineBound: the solver's variant must hold exactly one time_windows::Strict")
+periple_compile_fail(deadline_bound_two_strict
+    "DeadlineBound: the solver's variant must hold exactly one time_windows::Strict")
 
 # Each public header compiles on its own, so a header includes what it uses.
 file(GLOB_RECURSE periple_headers CONFIGURE_DEPENDS

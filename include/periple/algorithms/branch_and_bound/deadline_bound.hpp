@@ -12,6 +12,7 @@
 //      the end of the tour, test 1
 
 #include <periple/algorithms/branch_and_bound/search.hpp>
+#include <periple/core/composed.hpp>
 #include <periple/variants/time_windows.hpp>
 
 #include <algorithm>
@@ -19,32 +20,69 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace periple::time_windows {
 
+namespace detail {
+
+// How many Strict a variant holds, and whether nothing in it makes a time
+// earlier (periple::detail::only_delays), through compositions.
+template <typename V>
+struct timing {
+	static constexpr std::size_t stricts = std::is_same_v<V, Strict> ? 1 : 0;
+	static constexpr bool delays_only = periple::detail::only_delays<V>::value;
+};
+
+template <typename... Vs>
+struct timing<Composed<Vs...>> {
+	static constexpr std::size_t stricts = (timing<Vs>::stricts + ... + 0);
+	static constexpr bool delays_only = (timing<Vs>::delays_only && ...);
+};
+
+// The variants under which branch_and_bound() applies the deadline test.
+template <typename Variant>
+inline constexpr bool deadline_test_exact = timing<Variant>::stricts == 1 && timing<Variant>::delays_only;
+
+// The Strict of a variant that holds exactly one.
+inline const Strict& strict_of(const Strict& windows) { return windows; }
+
+template <typename... Vs>
+const Strict& strict_of(const Composed<Vs...>& composed) {
+	static constexpr bool holds[] = {(timing<Vs>::stricts > 0)...};
+	constexpr auto i = static_cast<std::size_t>(std::find(holds, holds + sizeof...(Vs), true) - holds);
+	return strict_of(composed.template component<i>());
+}
+
+} // namespace detail
+
 // Lower bound for branch_and_bound under Strict windows, around an inner bound:
 // a node from which some unvisited city, or the return to the first, can no
 // longer be reached before the last of its windows closes is a dead_end; any
-// other node gets the inner bound's value. Passed as
-// branch_and_bound(time_windows::DeadlineBound(tw, SpanningArborescenceBound{})),
-// tw the Strict of the solver's variant. Leaving the last city at its earliest
-// departure, the tour reaches each city no sooner than by the shortest path,
-// since waiting only delays (Desrosiers, Dumas, Soumis; Dumas et al.). The test
-// times the tour under tw alone, without services: a variant that adds them, or
-// any other delay, only makes a tour later, so every tour it accepts passes.
-// Shortest paths by Floyd-Warshall in begin, O(n^3) once, n^2 doubles. O(n)
-// per node.
+// other node gets the inner bound's value. Leaving the last city at its
+// earliest departure, the tour reaches each city no sooner than by the
+// shortest path, since waiting only delays (Desrosiers, Dumas, Soumis; Dumas
+// et al.). The windows are those of the one Strict in the solver's variant.
+// The test times the tour under them alone: it stays exact while nothing else
+// in the variant makes a time earlier, as service times only delay.
+// branch_and_bound() checks that before applying it; passed explicitly, as
+// branch_and_bound(time_windows::DeadlineBound(AssignmentBound{})), it is left
+// to the caller. Shortest paths by Floyd-Warshall in begin, O(n^3) once, n^2
+// doubles. O(n) per node.
 template <typename Bound>
 class DeadlineBound {
 public:
 	static constexpr bool assumes_nonnegative_penalties = periple::detail::assumes_nonnegative_penalties<Bound>;
 
-	DeadlineBound(const Strict& windows, Bound bound) : windows_(&windows), bound_(std::move(bound)) {}
+	explicit DeadlineBound(Bound bound) : bound_(std::move(bound)) {}
 
 	template <DistanceSource Dist, typename Variant, typename Stop>
 	void begin(const Solver<Dist, Variant>& solver, Stop& stop) {
+		static_assert(detail::timing<Variant>::stricts == 1,
+			"DeadlineBound: the solver's variant must hold exactly one time_windows::Strict, whose windows the test reads");
+		windows_ = &detail::strict_of(solver.variant());
 		n_ = solver.size();
 		// Stopped, the search ends before the first lower_bound.
 		if (!shortest_paths(solver, stop)) return;
@@ -130,7 +168,7 @@ private:
 		return late;
 	}
 
-	const Strict* windows_;
+	const Strict* windows_ = nullptr;  // the Strict of the solver's variant, set by begin
 	Bound bound_;
 	std::size_t n_ = 0, first_ = 0;
 	std::vector<double> paths_;        // paths_[a * n_ + b]: shortest travel time from a to b

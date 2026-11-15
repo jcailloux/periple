@@ -14,9 +14,21 @@
 #include <periple/core/moves/dp_move.hpp>
 
 #include <cstddef>
+#include <type_traits>
 #include <vector>
 
 namespace periple {
+
+namespace detail {
+
+// A variant that changes RouteTiming only by adding nonnegative amounts to its
+// departure. When every component of a variant does, a departure is at least
+// the arrival plus the amount of any one component, which DeadlineBound needs.
+// The shipped variants that qualify specialize it.
+template <typename V>
+struct only_delays : std::false_type {};
+
+} // namespace detail
 
 struct RouteTiming {
 	// Tentative state (written by init, read/adjusted by move_prepare)

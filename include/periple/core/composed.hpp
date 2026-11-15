@@ -9,6 +9,7 @@
 
 #include <periple/core/dimensions.hpp>
 
+#include <cstddef>
 #include <tuple>
 #include <type_traits>
 
@@ -57,6 +58,12 @@ class Composed : public detail::composed_dimension_base<typename detail::merge_d
 
 public:
 	explicit Composed(const Vs&... vs) : variants_(&vs...) {}
+
+	// The I-th variant, in the order passed to the constructor.
+	template <std::size_t I>
+	[[nodiscard]] auto component() const -> const std::tuple_element_t<I, std::tuple<Vs...>>& {
+		return *std::get<I>(variants_);
+	}
 
 	template <typename Move, typename Ctx>
 	void move_prepare(const Move& m, Ctx& ctx) const {
