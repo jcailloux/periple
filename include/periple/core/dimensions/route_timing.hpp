@@ -6,7 +6,8 @@
 // Used by time_windows variants to check feasibility and compute penalties.
 //
 // Supports both constructive algorithms (AppendMove, per-position committed
-// state) and exact DP algorithms (DPMove, per-(set,city) committed state).
+// state) and exact DP algorithms (DPMove, per-state committed state, indexed
+// by the move).
 
 #include <periple/core/staged_vector.hpp>
 #include <periple/core/traits.hpp>
@@ -41,9 +42,8 @@ struct RouteTiming {
 	// departures[pos-1] + travel. This is the sole propagating state.
 	StagedVector<double> departures;
 
-	// Committed DP (per-(set,city), allocated lazily on first DPMove init)
+	// Committed DP (per state, at the indices carried by DPMove)
 	std::vector<double> dp_departures;
-	std::size_t dp_n_ = 0;
 
 	void resize(std::size_t n) { departures.resize(n); }
 	void reset() { departures.fill(0.0); }
@@ -88,22 +88,21 @@ struct RouteTiming {
 
 	// --- DPMove (exact, inline commit, no snapshot) -----------------------
 
+	void resize_dp(std::size_t states) {
+		if (dp_departures.size() < states) dp_departures.resize(states);
+	}
+
+	void begin_dp(std::size_t state) { dp_departures[state] = 0.0; }
+
 	template <DistanceSource Dist, typename CityT>
 	void init(const DPMove<CityT>& m, const Dist& dist) {
-		if (dp_departures.empty()) {
-			dp_n_ = dist.size();
-			dp_departures.resize(dp_n_ * (std::size_t{1} << dp_n_));
-		}
-		std::size_t idx = m.set * dp_n_ + static_cast<std::size_t>(m.from);
-		arrival = dp_departures[idx] + static_cast<double>(dist(m.from, m.to));
+		arrival = dp_departures[m.from_state] + static_cast<double>(dist(m.from, m.to));
 		departure = arrival;
 	}
 
 	template <typename CityT>
 	void commit(const DPMove<CityT>& m) {
-		std::size_t new_set = m.set | (std::size_t{1} << static_cast<std::size_t>(m.to));
-		std::size_t idx = new_set * dp_n_ + static_cast<std::size_t>(m.to);
-		dp_departures[idx] = departure;
+		dp_departures[m.to_state] = departure;
 	}
 };
 

@@ -70,6 +70,8 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 
 	// Base: start at city 0
 	dp[idx(1, 0)] = cost_type{};
+	ctx_.resize_dp(table_sz);
+	ctx_.begin_dp(idx(1, 0));
 
 	const auto& v = variant();
 
@@ -89,7 +91,7 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 				auto cj = static_cast<city_type>(j);
 				auto raw_dist = (*dist_)(ci, cj);
 
-				DPMove<city_type> move{ci, cj, S};
+				DPMove<city_type> move{ci, cj, S, idx(S, i)};
 				ctx_.init(move, *dist_, dp[idx(S, i)]);
 				invoke_prepare(v, move, ctx_);
 
@@ -102,6 +104,7 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 				if (new_cost < dp[idx(S_next, j)]) {
 					dp[idx(S_next, j)]     = new_cost;
 					parent[idx(S_next, j)] = ci;
+					move.to_state = idx(S_next, j);
 					ctx_.commit(move);
 				}
 			}
@@ -119,7 +122,7 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 		auto ci = static_cast<city_type>(i);
 		auto raw_dist = (*dist_)(ci, city_type{0});
 
-		DPMove<city_type> move{ci, city_type{0}, full};
+		DPMove<city_type> move{ci, city_type{0}, full, idx(full, i)};
 		ctx_.init(move, *dist_, dp[idx(full, i)]);
 		invoke_prepare(v, move, ctx_);
 

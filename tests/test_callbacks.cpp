@@ -2,6 +2,7 @@
 #include <periple/variants/time_windows.hpp>
 #include <logging_callbacks.hpp>
 
+#include <bit>
 #include <cassert>
 #include <cstdio>
 #include <cstddef>
@@ -173,6 +174,65 @@ void test_protocol_held_karp_logging() {
 	}
 	for (std::size_t k = 2 * dp_moves; k < cb.log.size(); ++k)
 		assert(cb.log[k] == "move_prepare" && "rebuild_and_cost replays the tour through move_prepare alone");
+}
+
+// Stores |set| per DP state; init checks that from_state holds the right one.
+struct SetSizeCheck {
+	std::vector<std::size_t> size_at;
+	std::size_t pending = 0;
+
+	void resize(std::size_t) {}
+	void reset() {}
+
+	// Tracks nothing along a tour; required since every tour is costed by appending.
+	template <DistanceSource Dist, typename CityT>
+	void init(const AppendMove<CityT>&, const Dist&) {}
+
+	void resize_dp(std::size_t states) {
+		if (size_at.size() < states) size_at.resize(states);
+	}
+	void begin_dp(std::size_t state) { size_at[state] = 1; }
+
+	template <DistanceSource Dist, typename CityT>
+	void init(const DPMove<CityT>& m, const Dist&) {
+		assert(m.from_state < size_at.size() && "from_state must lie within resize_dp");
+		assert(size_at[m.from_state] == static_cast<std::size_t>(std::popcount(m.set))
+			&& "from_state must hold the state reached with set");
+		pending = size_at[m.from_state] + 1;
+	}
+
+	template <typename CityT>
+	void commit(const DPMove<CityT>& m) {
+		assert(m.to_state != DPMove<CityT>::no_state && "a committed move must carry to_state");
+		assert(m.to_state < size_at.size() && "to_state must lie within resize_dp");
+		size_at[m.to_state] = pending;
+	}
+};
+
+struct SetSizeVariant {
+	using dimension = SetSizeCheck;
+};
+
+void test_protocol_dp_state_indices() {
+	SymmetricDistanceMatrix<int> mat6({
+		{ 0, 12, 29, 22, 13, 24},
+		{12,  0, 19,  3, 25,  6},
+		{29, 19,  0, 21, 23, 28},
+		{22,  3, 21,  0,  4,  5},
+		{13, 25, 23,  4,  0, 16},
+		{24,  6, 28,  5, 16,  0}
+	});
+	auto check = [](const auto& mat) {
+		SetSizeVariant variant;
+		Solver solver(mat, variant);
+		solver.held_karp();
+		Solver plain(mat);
+		plain.held_karp();
+		assert(solver.status() == SolutionStatus::optimal && "SetSizeCheck rejects nothing, so held_karp must succeed");
+		assert(solver.cost() == plain.cost() && "a dimension that changes no cost must not change the optimum");
+	};
+	check(make_mat4());
+	check(mat6);
 }
 
 // ---------------------------------------------------------------------------
@@ -779,6 +839,7 @@ int main() {
 		{"protocol_reversal_replay",     test_protocol_reversal_replay},
 		{"protocol_two_opt_replay",      test_protocol_two_opt_replay},
 		{"protocol_held_karp_logging",   test_protocol_held_karp_logging},
+		{"protocol_dp_state_indices",    test_protocol_dp_state_indices},
 		{"protocol_branch_and_bound_logging", test_protocol_branch_and_bound_logging},
 		{"protocol_construction_sees_prefix", test_protocol_construction_sees_prefix},
 		// Unit - move_filter
