@@ -8,16 +8,22 @@
 #include <periple/core/dimensions/route_timing.hpp>
 #include <periple/core/moves/dp_move.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <span>
+#include <type_traits>
+#include <vector>
 
 namespace periple::service_times {
 
 struct ServiceTimes {
 	using dimension = RouteTiming;
 
-	explicit ServiceTimes(std::span<const double> times) : times_(times.begin(), times.end()) {}
+	explicit ServiceTimes(std::span<const double> times) : times_(times.begin(), times.end()) {
+		assert(std::all_of(times_.begin(), times_.end(), [](double t) { return t >= 0; })
+			&& "ServiceTimes: every service time must be a nonnegative duration");
+	}
 
 	// --- AppendMove ---
 
@@ -42,3 +48,10 @@ private:
 };
 
 } // namespace periple::service_times
+
+namespace periple::detail {
+
+// Adds each city's service duration, nonnegative as the constructor asserts.
+template <> struct only_delays<service_times::ServiceTimes> : std::true_type {};
+
+} // namespace periple::detail

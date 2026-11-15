@@ -71,7 +71,7 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 	// Base: start at city 0
 	dp[idx(1, 0)] = cost_type{};
 
-	const auto& variant = variant_ref();
+	const auto& v = variant();
 
 	// Forward DP, polled apart: its units cost far more than the fill's.
 	detail::Poller stop_forward(deadline);
@@ -91,9 +91,9 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 
 				DPMove<city_type> move{ci, cj, S};
 				ctx_.init(move, *dist_, dp[idx(S, i)]);
-				invoke_prepare(variant, move, ctx_);
+				invoke_prepare(v, move, ctx_);
 
-				if (!invoke_filter(variant, move, ctx_)) continue;
+				if (!invoke_filter(v, move, ctx_)) continue;
 
 				cost_type edge_cost = static_cast<cost_type>(static_cast<double>(raw_dist) + ctx_.cost_delta);
 
@@ -121,9 +121,9 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 
 		DPMove<city_type> move{ci, city_type{0}, full};
 		ctx_.init(move, *dist_, dp[idx(full, i)]);
-		invoke_prepare(variant, move, ctx_);
+		invoke_prepare(v, move, ctx_);
 
-		if (!invoke_filter(variant, move, ctx_)) continue;
+		if (!invoke_filter(v, move, ctx_)) continue;
 
 		cost_type edge_cost = static_cast<cost_type>(static_cast<double>(raw_dist) + ctx_.cost_delta);
 

@@ -101,6 +101,7 @@ public:
 	[[nodiscard]] auto position()  const -> std::span<const city_type>;
 	[[nodiscard]] auto cost()      const -> cost_type;
 	[[nodiscard]] auto symmetric() const -> bool;
+	[[nodiscard]] auto variant()   const -> const Variant&;  // NoCallbacks{} without one
 	[[nodiscard]] auto is_visited(city_type city) const -> bool;
 	[[nodiscard]] auto distance(city_type i, city_type j) const -> cost_type;
 	void set_tour(std::span<const city_type> tour);
@@ -196,7 +197,8 @@ public:
 
 	auto two_opt(TwoOptParams params = {}) -> Solver&;
 
-	// Exact search, lower bound from symmetric() ? SpanningTreeBound : SpanningArborescenceBound.
+	// Exact search, lower bound from symmetric() ? SpanningTreeBound : SpanningArborescenceBound,
+	// inside time_windows::DeadlineBound when its test is exact for the variant.
 	auto branch_and_bound(BranchAndBoundParams params = {}) -> Solver&;
 
 	template <typename Bound>
@@ -249,16 +251,6 @@ private:
 	template <detail::LocalSearchMode Mode, typename P>
 	auto two_opt_improve(city_type a, std::size_t k, detail::ActiveQueue<city_type>& active,
 	                     P& stop) -> bool;
-
-	auto variant_ref() const -> const Variant& {
-		if constexpr (std::is_same_v<Variant, NoCallbacks>) {
-			static constexpr NoCallbacks fallback{};
-			return fallback;
-		} else {
-			assert(variant_ && "variant_ref: no variant set on solver");
-			return *variant_;
-		}
-	}
 
 	// Adjusted edge cost: raw distance + variant's cost_delta (set by prepare).
 	auto edge_delta(city_type from, city_type to) const -> double {
@@ -374,6 +366,17 @@ auto Solver<Dist, Variant>::cost() const -> cost_type {
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::symmetric() const -> bool {
 	return symmetric_;
+}
+
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::variant() const -> const Variant& {
+	if constexpr (std::is_same_v<Variant, NoCallbacks>) {
+		static constexpr NoCallbacks fallback{};
+		return fallback;
+	} else {
+		assert(variant_ && "variant: no variant set on solver");
+		return *variant_;
+	}
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -635,7 +638,7 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 	for (std::size_t i = 0; i < t.size(); ++i) {
 		AppendMove<city_type> move{t[i], (i > 0 ? t[i - 1] : city_type{}), i};
 		ctx_.init(move, *dist_, {t.data(), i}, {position_.data(), i}, total_cost);
-		invoke_prepare(variant_ref(), move, ctx_);
+		invoke_prepare(variant(), move, ctx_);
 
 		if (i > 0)
 			total_cost += static_cast<cost_type>(edge_delta(t[i - 1], t[i]));
@@ -648,7 +651,7 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 	if (t.size() == dist_->size() && t.size() > 1) {
 		AppendMove<city_type> closing{t[0], t.back(), t.size()};
 		ctx_.init(closing, *dist_, {t.data(), t.size()}, {position_.data(), t.size()}, total_cost);
-		invoke_prepare(variant_ref(), closing, ctx_);
+		invoke_prepare(variant(), closing, ctx_);
 		total_cost += static_cast<cost_type>(edge_delta(t.back(), t[0]));
 	}
 
@@ -694,8 +697,8 @@ void Solver<Dist, Variant>::close_tour() {
 	}
 	AppendMove<city_type> closing{tour_[0], tour_[n_ - 1], n_};
 	ctx_.init(closing, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
-	invoke_prepare(variant_ref(), closing, ctx_);
-	if (!invoke_filter(variant_ref(), closing, ctx_)) {
+	invoke_prepare(variant(), closing, ctx_);
+	if (!invoke_filter(variant(), closing, ctx_)) {
 		status_ = SolutionStatus::infeasible;
 		return;
 	}
@@ -712,8 +715,8 @@ auto Solver<Dist, Variant>::evaluate_append(city_type city) const -> std::option
 
 	AppendMove<city_type> move{city, tour_[n_ - 1], n_};
 	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
-	invoke_prepare(variant_ref(), move, ctx_);
-	if (!invoke_filter(variant_ref(), move, ctx_))
+	invoke_prepare(variant(), move, ctx_);
+	if (!invoke_filter(variant(), move, ctx_))
 		return std::nullopt;
 
 	return edge_delta(tour_[n_ - 1], city);
@@ -734,7 +737,7 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 
 	AppendMove<city_type> move{city, (n_ > 0 ? tour_[n_ - 1] : city_type{}), n_};
 	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
-	invoke_prepare(variant_ref(), move, ctx_);
+	invoke_prepare(variant(), move, ctx_);
 
 	if (n_ > 0)
 		cost_ += static_cast<cost_type>(edge_delta(tour_[n_ - 1], city));
@@ -795,7 +798,7 @@ auto Solver<Dist, Variant>::evaluate_replay(
 
 	ctx_.begin_staging(from_pos);
 
-	const auto& variant = variant_ref();
+	const auto& v = variant();
 	cost_type running_cost = prefix_cost;
 
 	auto prev = city_at(from_pos - 1);
@@ -803,8 +806,8 @@ auto Solver<Dist, Variant>::evaluate_replay(
 		auto city = city_at(i);
 		AppendMove<city_type> move{city, prev, i};
 		ctx_.init(move, *dist_, running_cost);
-		invoke_prepare(variant, move, ctx_);
-		if (!invoke_filter(variant, move, ctx_))
+		invoke_prepare(v, move, ctx_);
+		if (!invoke_filter(v, move, ctx_))
 			return std::nullopt;
 		running_cost += static_cast<cost_type>(edge_delta(prev, city));
 		ctx_.commit(move);
@@ -815,8 +818,8 @@ auto Solver<Dist, Variant>::evaluate_replay(
 	auto first = city_at(0);
 	AppendMove<city_type> closing{first, prev, n_};
 	ctx_.init(closing, *dist_, running_cost);
-	invoke_prepare(variant, closing, ctx_);
-	if (!invoke_filter(variant, closing, ctx_))
+	invoke_prepare(v, closing, ctx_);
+	if (!invoke_filter(v, closing, ctx_))
 		return std::nullopt;
 	running_cost += static_cast<cost_type>(edge_delta(prev, first));
 
