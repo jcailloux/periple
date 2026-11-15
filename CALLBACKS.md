@@ -148,6 +148,7 @@ Solver solver(matrix, variant);
 - Pipelines `move_prepare` through all variants in order (fold)
 - AND-short-circuits `move_filter` through all variants in order
 - Merges and deduplicates dimensions from all variants
+- Returns the I-th variant from `component<I>()`, counted from 0 in the order passed
 
 Convention: place adjusters (ServiceTimes) before verifiers (Strict) so that filters see the adjusted state.
 
@@ -227,14 +228,16 @@ Three built-in bounds, all computed on raw distances: a variant with negative pe
 | `SpanningArborescenceBound` | any | up to its member `iterations` (default 30) minimum arborescences over the remaining cities, O(n^2) each |
 | `AssignmentBound` | any | at most two shortest augmenting paths, O(n^2) each; O(n^3) once, at the root |
 
-`branch_and_bound()` uses `SpanningTreeBound` on distances declared symmetric ([Symmetry](DISTANCE_SOURCES.md#symmetry)) and `SpanningArborescenceBound` otherwise. [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches, and when to pass `AssignmentBound`. Each bound has its own header, named after it, in `periple/algorithms/branch_and_bound/`; `branch_and_bound.hpp` includes the two defaults.
+`branch_and_bound()` uses `SpanningTreeBound` on distances declared symmetric ([Symmetry](DISTANCE_SOURCES.md#symmetry)) and `SpanningArborescenceBound` otherwise, inside `time_windows::DeadlineBound` under strict time windows (below). [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches, and when to pass `AssignmentBound`. Each bound has its own header, named after it, in `periple/algorithms/branch_and_bound/`; `branch_and_bound.hpp` includes those of `branch_and_bound()`.
 
-Under `Strict` time windows, `time_windows::DeadlineBound(tw, bound)` (`deadline_bound.hpp`, same directory) wraps a bound. It returns `dead_end` for a node from which an unvisited city, or the return to the first, can no longer be reached before the last of its windows closes, even by the shortest path, and the value of `bound` otherwise. `tw` is the `Strict` of the solver's variant, held by pointer like the variant itself. The test times tours under `tw` alone: service times, or any other variant that only delays departures, leave it exact. It costs O(n^3) once, at the root, for the shortest paths, n^2 doubles, then O(n) per node.
+`time_windows::DeadlineBound(bound)` (`deadline_bound.hpp`) wraps a bound under `Strict` time windows. It returns `dead_end` for a node from which an unvisited city, or the return to the first, can no longer be reached before the last of its windows closes, even by the shortest path, and the value of `bound` otherwise. It costs O(n^3) once, at the root, for the shortest paths, n^2 doubles, then O(n) per node. It reads the windows of the solver's `Strict`, alone or in a `Composed`; a variant with no `Strict`, or two, does not compile with it.
+
+It times tours under those windows alone, so it stays exact while nothing else in the variant makes a time earlier. `branch_and_bound()` applies it when that is certain: under a single `Strict`, alone or composed only with `ServiceTimes` and `Relaxed`, which only delay departures. With a variant of your own in the composition, pass it yourself if yours never does:
 
 ```cpp
-periple::time_windows::Strict tw(windows);
-periple::Solver solver(matrix, tw);
-solver.branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::SpanningArborescenceBound{}));
+auto variant = periple::Composed(loading, tw);  // loading: your variant, it only adds to departures
+periple::Solver solver(matrix, variant);
+solver.branch_and_bound(periple::time_windows::DeadlineBound(periple::SpanningArborescenceBound{}));
 ```
 
 A complete tour held on entry is the first tour to beat. Without a variant any tour counts, rotated to `start_city`. With a variant the cost depends on the start, so the tour must start at `start_city`: call `clear()` first otherwise. `resume_at` keeps `tour[0..resume_at)` and searches its completions.
