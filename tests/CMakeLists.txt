@@ -2,6 +2,9 @@
 foreach(config RELEASE RELWITHDEBINFO MINSIZEREL)
     string(REPLACE "-DNDEBUG" "" CMAKE_CXX_FLAGS_${config} "${CMAKE_CXX_FLAGS_${config}}")
 endforeach()
+# And check container bounds (libstdc++): an index out of range aborts instead
+# of writing past the end unnoticed.
+add_compile_definitions(_GLIBCXX_ASSERTIONS)
 
 add_executable(test_distance_matrix test_distance_matrix.cpp)
 target_link_libraries(test_distance_matrix PRIVATE periple::periple)
@@ -90,6 +93,8 @@ periple_compile_fail(deadline_bound_no_strict
     "DeadlineBound: the solver's variant must hold exactly one time_windows::Strict")
 periple_compile_fail(deadline_bound_two_strict
     "DeadlineBound: the solver's variant must hold exactly one time_windows::Strict")
+periple_compile_fail(dp_dimension_without_storage
+    "dimension commits DPMove state without resize_dp/begin_dp")
 
 # Each public header compiles on its own, so a header includes what it uses.
 file(GLOB_RECURSE periple_headers CONFIGURE_DEPENDS
