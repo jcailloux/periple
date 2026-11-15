@@ -156,11 +156,12 @@ void test_protocol_two_opt_replay() {
 // Protocol: exact DP moves through the pipeline
 // ---------------------------------------------------------------------------
 
-void test_protocol_held_karp_logging() {
+template <typename Engine>
+void check_held_karp_logging(Engine engine) {
 	auto mat = make_mat4();
 	LoggingCallbacks cb;
 	Solver solver(mat, cb);
-	solver.held_karp();
+	solver.held_karp(engine);
 	assert(solver.status() == SolutionStatus::optimal && "LoggingCallbacks rejects nothing, so held_karp must succeed");
 
 	// Forward: 3 moves from {0}, 2 from each of the 3 one-city states, 1 from
@@ -174,6 +175,11 @@ void test_protocol_held_karp_logging() {
 	}
 	for (std::size_t k = 2 * dp_moves; k < cb.log.size(); ++k)
 		assert(cb.log[k] == "move_prepare" && "rebuild_and_cost replays the tour through move_prepare alone");
+}
+
+void test_protocol_held_karp_logging() {
+	check_held_karp_logging(AllSets{});
+	check_held_karp_logging(ReachableSets{});
 }
 
 // Stores |set| per DP state; init checks that from_state holds the right one.
@@ -222,17 +228,19 @@ void test_protocol_dp_state_indices() {
 		{13, 25, 23,  4,  0, 16},
 		{24,  6, 28,  5, 16,  0}
 	});
-	auto check = [](const auto& mat) {
+	auto check = [](const auto& mat, auto engine) {
 		SetSizeVariant variant;
 		Solver solver(mat, variant);
-		solver.held_karp();
+		solver.held_karp(engine);
 		Solver plain(mat);
-		plain.held_karp();
+		plain.held_karp(engine);
 		assert(solver.status() == SolutionStatus::optimal && "SetSizeCheck rejects nothing, so held_karp must succeed");
 		assert(solver.cost() == plain.cost() && "a dimension that changes no cost must not change the optimum");
 	};
-	check(make_mat4());
-	check(mat6);
+	check(make_mat4(), AllSets{});
+	check(mat6, AllSets{});
+	check(make_mat4(), ReachableSets{});
+	check(mat6, ReachableSets{});
 }
 
 // ---------------------------------------------------------------------------
