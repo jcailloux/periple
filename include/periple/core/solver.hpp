@@ -284,7 +284,7 @@ private:
 	mutable context_type ctx_;
 
 	// Algorithm caches (lazy, one per algorithm that needs persistent state)
-	std::optional<HKCache<cost_type, city_type>> hk_cache_;
+	std::optional<HKCache<cost_type>> hk_cache_;
 	std::optional<BBCache<cost_type, city_type>> bb_cache_;
 };
 
