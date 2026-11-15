@@ -9,6 +9,7 @@
 #include <periple/core/moves/dp_move.hpp>
 
 #include <bit>
+#include <cstdint>
 #include <limits>
 #include <span>
 
@@ -52,20 +53,21 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 	if (!hk_cache_) hk_cache_.emplace();
 
 	const std::size_t num_sets = std::size_t{1} << n_;
-	const std::size_t table_sz = num_sets * n_;
+	const std::size_t table_sz = (num_sets >> 1) * n_;  // odd sets only
 	hk_cache_->reserve(table_sz);
 
 	auto dp     = std::span<cost_type>(hk_cache_->dp.get(), table_sz);
-	auto parent = std::span<city_type>(hk_cache_->parent.get(), table_sz);
+	auto parent = std::span<std::uint8_t>(hk_cache_->parent.get(), table_sz);
 
+	// Every set holds city 0: S >> 1 drops that bit.
 	auto idx = [this](std::size_t S, std::size_t i) -> std::size_t {
-		return S * n_ + i;
+		return (S >> 1) * n_ + i;
 	};
 
-	// Only sets containing city 0 (odd S) are ever read.
+	// Only sets containing city 0 (odd S) are stored.
 	for (std::size_t S = 1; S < num_sets; S += 2) {
 		if (stop_fill()) return give_up();
-		std::fill_n(dp.begin() + static_cast<std::ptrdiff_t>(S * n_), n_, INF);
+		std::fill_n(dp.begin() + static_cast<std::ptrdiff_t>(idx(S, 0)), n_, INF);
 	}
 
 	// Base: start at city 0
@@ -103,7 +105,7 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 				cost_type new_cost = dp[idx(S, i)] + edge_cost;
 				if (new_cost < dp[idx(S_next, j)]) {
 					dp[idx(S_next, j)]     = new_cost;
-					parent[idx(S_next, j)] = ci;
+					parent[idx(S_next, j)] = static_cast<std::uint8_t>(i);
 					move.to_state = idx(S_next, j);
 					ctx_.commit(move);
 				}
@@ -150,7 +152,7 @@ auto Solver<Dist, Variant>::held_karp_run(D& deadline) -> Solver& {
 	std::size_t S = full;
 	for (std::size_t pos = n_ - 1; pos > 0; --pos) {
 		auto cur = static_cast<std::size_t>(tour_[pos]);
-		tour_[pos - 1] = parent[idx(S, cur)];
+		tour_[pos - 1] = static_cast<city_type>(parent[idx(S, cur)]);
 		S ^= (std::size_t{1} << cur);
 	}
 	std::fill_n(visited_.data(), n_, uint8_t{1});
