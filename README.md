@@ -176,17 +176,17 @@ ATSP support: **full** = native asymmetric support, **adapted** = supported with
 
 ### Choosing an exact solver
 
-`branch_and_bound` has no size limit and is exact under every variant with non-negative penalties, including [time windows, where `held_karp` may not be](VARIANTS.md#time-windows-tsptw). Without a variant it outruns `held_karp` beyond a dozen cities: 5 ms against 4.7 s on 24 random asymmetric cities. Its speed depends on its bound, by default the one that fits the declared symmetry ([Symmetry](DISTANCE_SOURCES.md#symmetry)):
+`branch_and_bound` has no size limit and is exact under every variant with non-negative penalties, including [time windows, where `held_karp` may not be](VARIANTS.md#time-windows-tsptw). Without a variant it outruns `held_karp` beyond a dozen cities: 5 ms against over 5 s on 24 random asymmetric cities. Its speed depends on its bound. By default, the bound fits the declared symmetry ([Symmetry](DISTANCE_SOURCES.md#symmetry)) and, under strict time windows, drops each partial tour that can no longer meet a deadline:
 
 | Instance | Call | Measured on one core of an i5-13500 |
 |---|---|---|
-| Symmetric | `branch_and_bound()` | Tier 1 within 3 ms, st70 in 1.5 s, kroB100 in 29 s, kroA100 unproved after 60 s |
-| Symmetric, under strict time windows | `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::SpanningTreeBound{}))` | Every case measured, berlin52 and st70, within 0.48 s |
-| Asymmetric | `branch_and_bound()` | TSPLIB: ftv38 in 82 ms, ry48p in 0.16 s, ft70 in 3.0 s; p43, ftv64 and ftv70 unproved after 60 s |
-| Asymmetric, under strict time windows | `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::SpanningArborescenceBound{}))` | On berlin52 and st70, every case measured within 0.84 s but one, unproved after 20 s |
-| Asymmetric, costs without structure, under strict time windows | `branch_and_bound(periple::time_windows::DeadlineBound(tw, periple::AssignmentBound{}))` | On uniform random costs, every case measured within 0.19 s, where the arborescence takes up to 10 s. On berlin52 and st70, keep the arborescence: around `AssignmentBound`, 6 of the 24 cases stay unproved after 20 s |
+| Symmetric | `branch_and_bound()` | Tier 1 within 3 ms, st70 in 1.6 s, kroB100 in 29 s, kroA100 unproved after 60 s |
+| Symmetric, under strict time windows | `branch_and_bound()` | Every case measured, berlin52 and st70, within 0.47 s |
+| Asymmetric | `branch_and_bound()` | TSPLIB: ftv38 in 84 ms, ry48p in 0.17 s, ft70 in 3.0 s; p43, ftv64 and ftv70 unproved after 60 s |
+| Asymmetric, under strict time windows | `branch_and_bound()` | On berlin52 and st70, every case measured within 0.82 s but one, unproved after 20 s |
+| Asymmetric, costs without structure, under strict time windows | `branch_and_bound(periple::time_windows::DeadlineBound(periple::AssignmentBound{}))` | On uniform random costs, every case measured within 0.18 s, where the arborescence takes up to 10 s. On berlin52 and st70, keep the arborescence: around `AssignmentBound`, 6 of the 24 cases stay unproved after 20 s |
 
-Under time windows, `tw` is the solver's `Strict` variant. The cases measured: the first 20, 30 and 40 cities of berlin52 and st70, each distance raised by up to 20% for the asymmetric ones, and asymmetric uniform random costs. Around the arrival times of a nearest-neighbor tour improved by 2-opt, each city but the first gets a window of 2, 5 or 10 mean arcs on either side, or so many that no deadline binds.
+The cases measured under time windows: the first 20, 30 and 40 cities of berlin52 and st70, each distance raised by up to 20% for the asymmetric ones, and asymmetric uniform random costs. Around the arrival times of a nearest-neighbor tour improved by 2-opt, each city but the first gets a window of 2, 5 or 10 mean arcs on either side, or so many that no deadline binds. With a variant of your own composed with `Strict`, `branch_and_bound()` leaves the deadline test out: [CALLBACKS.md](CALLBACKS.md#branch_and_bound) says when to pass it.
 
 A complete tour held by the solver is the first tour to beat, which cuts the search time by 12 to 61% on the Tier 2 instances proved:
 
@@ -324,6 +324,7 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, sym
 | `cost()` | `cost_type` | Cost of the current tour |
 | `size()` | `std::size_t` | Number of cities |
 | `symmetric()` | `bool` | Whether the distances are declared symmetric, by the source or `set_symmetric` |
+| `variant()` | `const Variant&` | The variant set on the solver |
 | `set_tour(span)` | `void` | Inject a tour (full or partial prefix) |
 | `rotate_to_front(city)` | `void` | Rotate a complete tour so `city` comes first, at equal cost |
 
