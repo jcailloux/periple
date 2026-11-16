@@ -66,41 +66,32 @@ inline std::vector<double> make_service(Instance& in) {
 	return service;
 }
 
-// exact_optimal: held_karp must reach the brute-force optimum. False only for
-// a known held_karp issue listed in CHANGELOG.md; other exact algorithms must
-// reach it regardless.
-
 struct StrictDeadlines {
 	static constexpr const char* name = "strict_deadlines";
-	static constexpr bool exact_optimal = true;
 	time_windows::Strict variant;
 	explicit StrictDeadlines(Instance& in) : variant(make_windows(in, {}, false)) {}
 };
 
 struct StrictWindows {
 	static constexpr const char* name = "strict_windows";
-	static constexpr bool exact_optimal = false;  // known issue, see CHANGELOG.md
 	time_windows::Strict variant;
 	explicit StrictWindows(Instance& in) : variant(make_windows(in, {}, true)) {}
 };
 
 struct RelaxedWindows {
 	static constexpr const char* name = "relaxed_windows";
-	static constexpr bool exact_optimal = false;  // known issue, see CHANGELOG.md
 	time_windows::Relaxed variant;
 	explicit RelaxedWindows(Instance& in) : variant(make_windows(in, {}, true), 10) {}
 };
 
 struct ServiceOnly {
 	static constexpr const char* name = "service_times";
-	static constexpr bool exact_optimal = true;
 	service_times::ServiceTimes variant;
 	explicit ServiceOnly(Instance& in) : variant(make_service(in)) {}
 };
 
 struct ServiceStrictDeadlines {
 	static constexpr const char* name = "service_times+strict_deadlines";
-	static constexpr bool exact_optimal = true;
 	std::vector<double> service;
 	service_times::ServiceTimes times;
 	time_windows::Strict windows;

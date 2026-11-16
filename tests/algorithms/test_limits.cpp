@@ -236,7 +236,8 @@ void test_reuse_after_stop(const Algo& algo) {
 }
 
 // The registry's held_karp takes AllSets under SlowPrepare, which filters
-// nothing: the limit tests run ReachableSets through this descriptor.
+// nothing and keeps no DP state: the limit tests run the other engines through
+// these descriptors.
 struct AlgoHeldKarpReachable : Algorithm<AlgoHeldKarpReachable> {
 	static constexpr const char* name = "held_karp(ReachableSets)";
 	static constexpr bool is_exact = true;
@@ -245,6 +246,17 @@ struct AlgoHeldKarpReachable : Algorithm<AlgoHeldKarpReachable> {
 	template <DistanceSource Dist, typename V>
 	void run(Solver<Dist, V>& s, const RunOptions& o) const {
 		s.held_karp(ReachableSets{}, {.time_limit = o.time_limit});
+	}
+};
+
+struct AlgoHeldKarpLabels : Algorithm<AlgoHeldKarpLabels> {
+	static constexpr const char* name = "held_karp(ReachableLabels)";
+	static constexpr bool is_exact = true;
+	static constexpr int  max_tier = 1;
+
+	template <DistanceSource Dist, typename V>
+	void run(Solver<Dist, V>& s, const RunOptions& o) const {
+		s.held_karp(ReachableLabels{}, {.time_limit = o.time_limit});
 	}
 };
 
@@ -270,4 +282,5 @@ int main() {
 	};
 	for_each_algorithm(nullptr, limit_tests);
 	limit_tests(AlgoHeldKarpReachable{});
+	limit_tests(AlgoHeldKarpLabels{});
 }

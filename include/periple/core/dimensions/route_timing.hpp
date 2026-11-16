@@ -14,6 +14,7 @@
 #include <periple/core/moves/append_move.hpp>
 #include <periple/core/moves/dp_move.hpp>
 
+#include <compare>
 #include <cstddef>
 #include <type_traits>
 #include <vector>
@@ -103,6 +104,12 @@ struct RouteTiming {
 	template <typename CityT>
 	void commit(const DPMove<CityT>& m) {
 		dp_departures[m.to_state] = departure;
+	}
+
+	// Earlier is never worse: under the shipped variants, a later departure
+	// meets no window an earlier one misses, and pays no less.
+	[[nodiscard]] auto compare_dp(std::size_t state) const -> std::partial_ordering {
+		return departure <=> dp_departures[state];
 	}
 };
 

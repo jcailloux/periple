@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <limits>
+#include <type_traits>
 
 namespace periple {
 
@@ -18,5 +19,15 @@ struct DPMove {
 	std::size_t from_state = 0;
 	std::size_t to_state = no_state;
 };
+
+namespace detail {
+
+// A variant under which the cheapest of the states that share a (set, city)
+// is never worse for the rest of the tour, so held_karp() keeps that one alone.
+// The shipped variants that qualify specialize it.
+template <typename V>
+struct cheapest_state_suffices : std::false_type {};
+
+} // namespace detail
 
 } // namespace periple
