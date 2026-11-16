@@ -309,7 +309,7 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, sym
 | `Solver(dist, variant)` | Create with variant callbacks; the variant must outlive the solver |
 | `Solver()` | Create an empty solver (requires explicit template parameter) |
 | `set_matrix(dist)` | Bind (or rebind) to a distance source, clearing any solution |
-| `set_variant(v)` | Set or change the variant |
+| `set_variant(v)` | Set or change the variant, clearing any solution; to start from the current tour, copy it and pass it to `set_tour` afterwards |
 | `set_symmetric(bool)` | Override the source's symmetry declaration until the next `set_matrix`. `true` is checked in debug |
 | `set_symmetric(bool, unchecked)` | Same, without the debug check |
 | `clear()` | Clear the current solution, keep the distance source |
@@ -325,7 +325,7 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, sym
 | `size()` | `std::size_t` | Number of cities |
 | `symmetric()` | `bool` | Whether the distances are declared symmetric, by the source or `set_symmetric` |
 | `variant()` | `const Variant&` | The variant set on the solver |
-| `set_tour(span)` | `void` | Inject a tour (full or partial prefix) |
+| `set_tour(span)` | `void` | Inject a tour (full or partial prefix), `infeasible` if `move_filter` rejects one of its moves ([Partial tours](CALLBACKS.md#partial-tours)) |
 | `rotate_to_front(city)` | `void` | Rotate a complete tour so `city` comes first, at equal cost |
 
 ### Algorithms

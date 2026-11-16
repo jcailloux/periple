@@ -7,7 +7,7 @@
 - `time_limit` in the params of every algorithm: stopped early, it returns its best complete tour (`feasible`) or else a partial one (`partial`).
 - Benchmark runner: `--time-limit MS`.
 - `select_next(solver, stop)`: a construction strategy that runs long can honor `time_limit`.
-- `branch_and_bound()`: exact depth-first search through the `AppendMove` pipeline, so it honors every variant and stays exact under time windows. A complete tour held by the solver is the first to beat, `resume_at` searches the completions of a prefix, `max_nodes` and `time_limit` stop it early.
+- `branch_and_bound()`: exact depth-first search through the `AppendMove` pipeline, so it honors every variant and stays exact under time windows. A feasible tour held by the solver is the first to beat, `resume_at` searches the completions of a prefix, `max_nodes` and `time_limit` stop it early.
 - `branch_and_bound(bound)`: the same search with a lower bound strategy (`lower_bound`, optional `begin`). Built-in bounds: `SpanningTreeBound` for symmetric distances and `SpanningArborescenceBound` for any instance, Held-Karp Lagrangian relaxations ascended at every node and the defaults of `branch_and_bound()`; `AssignmentBound`, for costs without structure under time windows.
 - `branch_and_bound(bound, order)`: the order of the children is a strategy too, through `order` (once per node, permutes the scored children) or `pick` (before each descent, the next child), or both. `CheapestFirst` is the default. `dead_end` is what a lower bound returns for a node without a feasible completion.
 - `time_windows::DeadlineBound(bound)`: a bound for `branch_and_bound` under `Strict` windows, around another bound. It prunes a node from which an unvisited city, or the return to the first, can no longer meet its deadline, even by the shortest path. `branch_and_bound()` applies it under a single `Strict`, alone or composed only with `ServiceTimes` and `Relaxed`.
@@ -32,6 +32,7 @@
 - `load_tsplib` returns a `DistanceMatrix<int>`, declared symmetric unless the file's `TYPE` is `ATSP`, instead of a `SymmetricDistanceMatrix<int>`: about twice the memory. Code that names the type changes; `auto` does not.
 - `two_opt` takes its symmetric mode on every source declared symmetric, where it needed `set_symmetric(true)`: the tour found can differ, its first city too (`rotate_to_front` puts it back). `set_symmetric(false)` keeps the directed search.
 - `set_matrix` replaces a `set_symmetric` override with the new source's declaration, where it kept the override. `set_symmetric` requires a source, asserted in debug builds: call it after `set_matrix`.
+- `set_variant` clears the solution, as `set_matrix` does, where it kept the tour with the cost and status computed under the former variant. To start from the tour, copy it and pass it to `set_tour` after `set_variant`.
 - `ServiceTimes` requires nonnegative service times, asserted in debug builds.
 - A dimension that commits `DPMove` state provides `resize_dp(states)`, `begin_dp(state)` and `compare_dp(state)`, and stores its state at `DPMove::from_state` and `to_state` instead of indexing by `set`. `RouteTiming::dp_n_` is removed.
 
@@ -45,6 +46,8 @@
 - `held_karp` under `Relaxed`, and under `Strict` windows that make the vehicle wait, kept only the cheapest partial tour per visited set and last city: it could return a costlier tour as `optimal`, or `infeasible` for a feasible instance. `held_karp()` takes `ReachableLabels` there.
 - `held_karp` started from the first city at time 0, without its service time or the wait for its window, which `append()` and every other algorithm apply: it could return as `optimal` a costlier tour or one that misses a window.
 - `held_karp` under a `RouteTiming` variant, after `set_matrix` to a larger instance, indexed past the end of its DP departures.
+- `set_tour` and `resume_at` held a tour as `feasible` or `partial` even when `move_filter` rejects one of its moves, and `nearest_neighbor` resumed from a rejected prefix could return as `feasible` a tour that violates the variant. Both now replay the tour through `move_filter` as a construction does and hold a rejected tour as `infeasible`; resumed from one, `nearest_neighbor` and `greedy_construct` return at once.
+- `nearest_neighbor` and `greedy_construct` with `resume_at` equal to `size()` left the complete tour `partial`.
 
 ## v0.1.0 (2026-09-24)
 
