@@ -45,7 +45,8 @@ Key Solver methods:
 
 - **`evaluate_append(city)`** -- runs the pipeline, returns `std::optional<double>` (nullopt if filtered). Does not modify observable state (writes to `mutable ctx_`).
 - **`append(city)`** -- runs init + prepare, applies the move (places city, updates cost), commits dimension state.
-- **`rebuild_and_cost(tour)`** -- replays a complete tour through the pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. Used by `set_tour`, `resume_at`, `clear`.
+- **`rebuild_and_cost(tour)`** -- replays a tour, complete or a prefix, through the pipeline (init + prepare + commit for each city, then the closing edge of a complete tour), rebuilding dimension state, and returns its cost. It skips `move_filter`, so it serves tours the algorithm knows the variant admits: `held_karp` and `branch_and_bound` install theirs with it (`branch_and_bound` after `adopt_tour(tour)`, which copies the tour and marks its cities), `two_opt` re-costs its own. The caller sets the status.
+- **`resume_prefix(k)`** -- keeps `tour[0..k)` for `resume_at` and judges it as `set_tour` does ([Partial tours](CALLBACKS.md#partial-tours)): `infeasible` if `move_filter` rejects one of its moves, else `feasible` when complete, `partial` otherwise. On `infeasible`, return: no completion is admissible.
 - **`close_tour()`** -- adds the return-to-start edge cost for complete tours.
 - **`pop_back(prefix_cost)`** -- undoes the last `append`: frees the city and restores the given cost. Dimensions need no undo, the next `append` overwrites the freed position.
 - **`evaluate_replay(city_at, from, prefix)`** / **`evaluate_reversal(i, j)`** -- score a rewrite of an existing tour by replaying the changed suffix through the pipeline. Used by local search, see [CALLBACKS.md](CALLBACKS.md).
@@ -102,7 +103,7 @@ auto Solver<Dist, Variant>::nearest_neighbor(NearestNeighborParams params) -> So
 
 Three rules follow:
 
-- Every write to `tour_` or `n_` increments `tour_version_`. Write through the existing primitives (`append`, `pop_back`, `set_tour`, `accept_replay`, `accept_reversal`, `reverse_range`, `reverse_cyclic`), which do it for you; an algorithm that fills the tour itself, as `held_karp` does, increments it itself. A cache derived from the tour compares its own version against it, so a missing increment leaves that cache marked valid for a tour it no longer describes.
+- Every write to `tour_` or `n_` increments `tour_version_`. Write through the existing primitives (`append`, `pop_back`, `set_tour`, `adopt_tour`, `resume_prefix`, `accept_replay`, `accept_reversal`, `reverse_range`, `reverse_cyclic`), which do it for you; an algorithm that fills the tour itself, as `held_karp` does, increments it itself. A cache derived from the tour compares its own version against it, so a missing increment leaves that cache marked valid for a tour it no longer describes.
 - An algorithm never reads a workspace buffer it did not refresh in the same call.
 - Public accessors never expose the workspace category.
 
