@@ -166,7 +166,7 @@ See [CALLBACKS.md](CALLBACKS.md) for the callback architecture and [VARIANTS.md]
 | Algorithm | Category | Complexity | ATSP support |
 |-----------|----------|------------|--------------|
 | Nearest neighbor | Construction | O(n^2) | full |
-| Held-Karp | Exact | O(n^2 * 2^n), n <= 25 | full |
+| Held-Karp | Exact | O(n^2 * 2^n), n <= 25; with `ReachableSets`, O(n^2) per visited set reached, n <= 64 | full |
 | Branch and bound | Exact | exponential worst case, O(n^2) per node | full |
 | 2-opt | Improvement | O(n * k) per pass | adapted |
 
@@ -176,7 +176,7 @@ ATSP support: **full** = native asymmetric support, **adapted** = supported with
 
 ### Choosing an exact solver
 
-`branch_and_bound` has no size limit and is exact under every variant with non-negative penalties, including [time windows, where `held_karp` may not be](VARIANTS.md#time-windows-tsptw). Without a variant it outruns `held_karp` beyond a dozen cities: 5 ms against over 5 s on 24 random asymmetric cities. Its speed depends on its bound. By default, the bound fits the declared symmetry ([Symmetry](DISTANCE_SOURCES.md#symmetry)) and, under strict time windows, drops each partial tour that can no longer meet a deadline:
+`branch_and_bound` has no size limit and is exact under every variant with non-negative penalties. Without a variant it outruns `held_karp` beyond a dozen cities: 5 ms against 4.5 s on 24 random asymmetric cities. Its speed depends on its bound. By default, the bound fits the declared symmetry ([Symmetry](DISTANCE_SOURCES.md#symmetry)) and, under strict time windows, drops each partial tour that can no longer meet a deadline:
 
 | Instance | Call | Measured on one core of an i5-13500 |
 |---|---|---|
@@ -336,7 +336,8 @@ All algorithm methods return `Solver&` for chaining.
 |--------|-------------|
 | `nearest_neighbor(params)` | Construction heuristic |
 | `two_opt(params)` | 2-opt local search (`neighbors`: candidate list size, `max_moves`, `time_limit`) |
-| `held_karp(params)` | Exact solver, up to 25 cities |
+| `held_karp(params)` | Exact dynamic programming, its engine chosen by the variant ([Dynamic programming](CALLBACKS.md#dynamic-programming)) |
+| `held_karp(engine, params)` | Same with the engine passed: `AllSets`, `ReachableSets` or `ReachableLabels` |
 | `branch_and_bound(params)` | Exact search with the default bound (`start_city`, `resume_at`, `max_nodes`, `time_limit`) |
 | `branch_and_bound(bound, params)` | Same with your own lower bound |
 | `branch_and_bound(bound, order, params)` | Same with your own order of the children |

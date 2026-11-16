@@ -74,7 +74,7 @@ Each algorithm family defines its own move types. Variant callbacks provide over
 | `AppendMove<CityT>` | Constructive (NN, greedy), branch and bound + closing edge + replay | `city` |
 | `DPMove<CityT>` | Exact (Held-Karp) | `from`, `to`, `set` |
 
-`DPMove::set` is a bitmask of visited cities (includes `from`, excludes `to`).
+`DPMove::set` is a bitmask of visited cities (includes `from`, excludes `to`). Its `from_state` and `to_state` index the DP state of the dimensions ([Writing your own dimension](VARIANTS.md#writing-your-own-dimension)).
 
 A variant supporting `held_karp` provides overloads for both:
 
@@ -121,7 +121,7 @@ struct MyVariant {
 
 If the variant has no `dimension` typedef, the Solver uses `EmptyContext` (no dimensions, just `cost_delta`).
 
-`RouteTiming` is the built-in dimension provided by Periple. It tracks `arrival` and `departure` times per position (constructive) or per `(set, city)` state (DP).
+`RouteTiming` is the built-in dimension provided by Periple. It tracks `arrival` and `departure` times per position (constructive) or per DP state.
 
 ### context_for deduction
 
@@ -331,6 +331,54 @@ bool improve_once(Solver& solver) {
 ```
 
 `evaluate_reversal` and `accept_reversal` are the pair `two_opt` uses in replay mode. Without a variant there is nothing to stage: compute the delta from `path_cost` and pass the resulting cost to `accept_reversal`.
+
+## Dynamic programming
+
+`held_karp` extends partial tours from city 0 by `DPMove`, one more visited city at a time. Per visited set and last city, it keeps the partial tours its engine needs, each with its cost and the DP state of the dimensions. Three engines:
+
+| Engine | Visited sets | Partial tours kept per set and last city | Cities |
+|---|---|---|---|
+| `periple::AllSets` | every set that contains city 0 | the cheapest | up to 25 |
+| `periple::ReachableSets` | those that moves accepted by the variant reach | the cheapest | up to 64 |
+| `periple::ReachableLabels` | those that moves accepted by the variant reach | those that no other dominates, costing no more and never worse by the dimensions' `compare_dp` | up to 64 |
+
+`held_karp()` takes, from the variant's type:
+
+1. `ReachableLabels` when a dimension keeps DP state, as `RouteTiming` under `Strict` and `Relaxed`: there, a costlier partial tour that departs earlier can hold the only feasible completion, or the cheapest. A shipped variant under which the cheapest always suffices declares it, as `ServiceTimes` does.
+2. Else `ReachableSets` when the variant filters `DPMove`.
+3. Else `AllSets`, where `ReachableSets` would reach every set at a higher cost.
+
+[VARIANTS.md](VARIANTS.md) gives the engine of each shipped variant. `held_karp(engine)` takes the engine passed instead:
+
+```cpp
+solver.held_karp(periple::AllSets{});
+```
+
+| End of the run | Status |
+|---|---|
+| tour found | `optimal` |
+| no tour | `infeasible`, empty tour |
+| `time_limit` reached | `partial`, city 0 alone |
+
+`AllSets` and `ReachableSets` passed where `held_karp()` takes `ReachableLabels` keep the cheapest partial tour, and check the others they drop. Once they drop one that no other dominates, a tour found is `feasible` instead of `optimal`, and without a tour the solver holds city 0 alone, `partial`, instead of `infeasible`. Under `Strict` windows that never make the vehicle wait, the cheapest dominates the others, so both stay `optimal`. On random instances of 16 to 23 cities, `AllSets` took 0.6 to 1.2 times the time of `ReachableLabels` there, and up to 6 times under deadlines tight enough to leave few orders feasible.
+
+### Filter strength
+
+`ReachableSets` and `ReachableLabels` create only the visited sets that accepted moves reach, so their cost depends on how early the `DPMove` filter rejects. A filter is correct when every forbidden tour makes a move it rejects; it prunes when it also rejects every move after which no tour can be completed. Two filters that admit the same tours, the urgent cities before the others:
+
+```cpp
+// urgent, others: bitmasks of cities, city 0 in neither
+template <typename CityT>
+bool move_filter(const periple::DPMove<CityT>& m) const {
+    const bool to_urgent = (urgent >> m.to) & 1;
+    // Weak: rejects a move to an urgent city once another one is placed.
+    //   return !to_urgent || (m.set & others) == 0;
+    // Strong: rejects a move to another city while an urgent one is unvisited.
+    return to_urgent || (m.set & urgent) == urgent;
+}
+```
+
+With `u` urgent cities and `o` others, the weak filter reaches all 2^(u+o) visited sets, the strong one 2^u + 2^o - 1. On 21 random asymmetric cities, 10 of them urgent, `held_karp()` took 0.6 ms under the strong filter and 230 ms under the weak one, where `AllSets` took 120 ms.
 
 ## Variant callbacks and symmetry
 

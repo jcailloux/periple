@@ -15,6 +15,13 @@
 - `variant()` returns the solver's variant and `Composed::component<I>()` the I-th composed variant, so that a strategy can read them.
 - A distance source declares its symmetry with `symmetric()`, and the solver takes that declaration; `set_symmetric` overrides it. `SymmetricDistanceMatrix`, `jonker_volgenant()`, `CoordinateDistance` with a generic metric and the TSPLIB loaders declare it.
 - `DistanceMatrix` takes a trailing `periple::symmetric` to declare it symmetric, checked in debug builds when a solver receives it.
+- `held_karp(engine)`: the engine of the dynamic program. `periple::AllSets` holds every visited set, up to 25 cities; `periple::ReachableSets` only the sets that moves accepted by the variant's `DPMove` filter reach, up to 64 cities; `periple::ReachableLabels` the sets of `ReachableSets`, with every partial tour per set and last city that no other dominates. `held_karp()` takes `ReachableLabels` when a dimension of the variant keeps DP state that the cheapest partial tour may not settle, as under time windows, else `ReachableSets` when the variant filters `DPMove`, else `AllSets`. `AllSets` and `ReachableSets` passed where `held_karp()` takes `ReachableLabels` report `optimal` and `infeasible` only when proven: `feasible`, or `partial` without a tour, once they drop a partial tour that no other dominates.
+
+### Changed
+
+- `held_karp()` without a variant: about a fifth of the memory with `int` costs from 19 cities, and up to a fifth less time on a fresh solver.
+- `held_karp()` under a variant that filters `DPMove` creates only the visited sets that accepted moves reach: 10 to 170 times less time when the filter prunes most sets, up to 1.6 times more when it prunes little ([Filter strength](CALLBACKS.md#filter-strength)). `held_karp(periple::AllSets{})` keeps the table.
+- `held_karp()` under `Strict` takes `ReachableLabels`. Under windows that never make the vehicle wait, where `held_karp` was already exact, it takes less memory, and from under a tenth of the former time where deadlines prune most orders to 1.5 times where they prune none. `held_karp(periple::AllSets{})` stays `optimal` there, within 10% of the former time or faster.
 
 ### Breaking
 
@@ -26,6 +33,7 @@
 - `two_opt` takes its symmetric mode on every source declared symmetric, where it needed `set_symmetric(true)`: the tour found can differ, its first city too (`rotate_to_front` puts it back). `set_symmetric(false)` keeps the directed search.
 - `set_matrix` replaces a `set_symmetric` override with the new source's declaration, where it kept the override. `set_symmetric` requires a source, asserted in debug builds: call it after `set_matrix`.
 - `ServiceTimes` requires nonnegative service times, asserted in debug builds.
+- A dimension that commits `DPMove` state provides `resize_dp(states)`, `begin_dp(state)` and `compare_dp(state)`, and stores its state at `DPMove::from_state` and `to_state` instead of indexing by `set`. `RouteTiming::dp_n_` is removed.
 
 ### Fixed
 
@@ -34,10 +42,9 @@
 - `jonker_volgenant()`: forbidden edges cost `big_m` instead of the largest value of the cost type, which overflowed integer costs under `branch_and_bound` and directed `two_opt`.
 - The README documented a tour cost function and variant arguments on algorithm methods that do not exist. A variant is set on the solver: `Solver(dist, variant)` or `set_variant`.
 - `load_tsplib` reads a `FULL_MATRIX` whole: it kept the lower triangle, so an ATSP instance loaded wrong, without error. Under another `TYPE`, asymmetric `FULL_MATRIX` data throw `std::runtime_error` instead of losing their upper triangle.
-
-### Known issues
-
-- `held_karp` keeps only the cheapest state per (visited set, city). Under time windows, a costlier partial tour that arrives earlier can hold the best completion, so `held_karp` can return a costlier tour as `optimal` (`Strict` with waiting, `Relaxed`) or report `infeasible` for a feasible instance (`Strict` with waiting). Pinned by `tests/algorithms/test_held_karp_time_windows.cpp`.
+- `held_karp` under `Relaxed`, and under `Strict` windows that make the vehicle wait, kept only the cheapest partial tour per visited set and last city: it could return a costlier tour as `optimal`, or `infeasible` for a feasible instance. `held_karp()` takes `ReachableLabels` there.
+- `held_karp` started from the first city at time 0, without its service time or the wait for its window, which `append()` and every other algorithm apply: it could return as `optimal` a costlier tour or one that misses a window.
+- `held_karp` under a `RouteTiming` variant, after `set_matrix` to a larger instance, indexed past the end of its DP departures.
 
 ## v0.1.0 (2026-09-24)
 
