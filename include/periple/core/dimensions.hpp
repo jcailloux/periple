@@ -19,6 +19,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <compare>
+#include <concepts>
 #include <cstddef>
 #include <span>
 #include <tuple>
@@ -110,6 +112,20 @@ concept stores_dp_state = requires(D& d, std::size_t s) {
 	d.begin_dp(s);
 };
 
+// Orders the tentative DP state against a stored one, less meaning never worse
+// for the rest of the tour.
+template <typename D>
+concept orders_dp_state = requires(const D& d, std::size_t s) {
+	{ d.compare_dp(s) } -> std::convertible_to<std::partial_ordering>;
+};
+
+// Two dimensions' orders at once: equivalent yields to the other, opposite ones are unordered.
+constexpr std::partial_ordering combine_orders(std::partial_ordering a, std::partial_ordering b) {
+	if (a == 0) return b;
+	if (b == 0 || a == b) return a;
+	return std::partial_ordering::unordered;
+}
+
 // A dimension takes part in Move when it initializes or commits state for it.
 template <typename D, typename Move, typename Dist, typename Ctx>
 concept dimension_handles_move =
@@ -169,6 +185,7 @@ struct EmptyContext {
 
 	void resize_dp(std::size_t) {}
 	void begin_dp(std::size_t) {}
+	[[nodiscard]] std::partial_ordering compare_dp(std::size_t) const { return std::partial_ordering::equivalent; }
 
 	template <typename Move, typename Dist>
 	static constexpr bool dims_handle = true;
@@ -321,6 +338,21 @@ struct EvalContext {
 					d.begin_dp(s);
 			}(ds, state)), ...);
 		}, dims_);
+	}
+
+	// The tentative state against the one stored at state, over every dimension
+	// that keeps DP state: less or equivalent when it is never worse on any.
+	[[nodiscard]] std::partial_ordering compare_dp(std::size_t state) const {
+		auto order = std::partial_ordering::equivalent;
+		std::apply([&](const auto&... ds) {
+			(([&]<typename D>(const D& d) {
+				static_assert(detail::orders_dp_state<D> || !detail::stores_dp_state<D>,
+					"dimension stores DPMove state without compare_dp: held_karp tells by it whether a state it drops was dominated");
+				if constexpr (detail::stores_dp_state<D>)
+					order = detail::combine_orders(order, d.compare_dp(state));
+			}(ds)), ...);
+		}, dims_);
+		return order;
 	}
 
 	// True when every dimension that commits along the tour stages its state.

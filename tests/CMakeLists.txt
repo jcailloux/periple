@@ -95,8 +95,10 @@ periple_compile_fail(deadline_bound_two_strict
     "DeadlineBound: the solver's variant must hold exactly one time_windows::Strict")
 periple_compile_fail(dp_dimension_without_storage
     "dimension commits DPMove state without resize_dp/begin_dp")
+periple_compile_fail(dp_dimension_without_order
+    "dimension stores DPMove state without compare_dp")
 periple_compile_fail(held_karp_unknown_engine
-    "held_karp: the engine is periple::AllSets or periple::ReachableSets")
+    "held_karp: the engine is periple::AllSets, periple::ReachableSets or periple::ReachableLabels")
 
 # Each public header compiles on its own, so a header includes what it uses.
 file(GLOB_RECURSE periple_headers CONFIGURE_DEPENDS

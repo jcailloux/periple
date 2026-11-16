@@ -54,4 +54,8 @@ namespace periple::detail {
 // Adds each city's service duration, nonnegative as the constructor asserts.
 template <> struct only_delays<service_times::ServiceTimes> : std::true_type {};
 
+// Adds to departures but never reads them: neither its cost nor a filter of its
+// own depends on time.
+template <> struct cheapest_state_suffices<service_times::ServiceTimes> : std::true_type {};
+
 } // namespace periple::detail

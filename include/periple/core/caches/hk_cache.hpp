@@ -114,4 +114,26 @@ struct HKStatesCache {
 	}
 };
 
+// ReachableLabels
+template <typename CostT>
+struct HKLabelsCache {
+	std::vector<std::size_t> masks;    // visited set of each slot, in layer order
+	std::vector<std::uint32_t> first;  // per state (slot * n + city): its first label
+	std::vector<std::uint32_t> last;   // per state: one past its last label
+	std::vector<CostT> cost;           // per label; the maximum marks a dominated one
+	std::vector<std::uint32_t> pred;   // per label: predecessor label
+	std::vector<std::uint8_t> city;    // per label: last city
+	detail::MaskIndex index;           // masks of the layer being discovered
+
+	void reset() {
+		masks.clear();
+		first.clear();
+		last.clear();
+		cost.clear();
+		pred.clear();
+		city.clear();
+		index.reset();
+	}
+};
+
 } // namespace periple

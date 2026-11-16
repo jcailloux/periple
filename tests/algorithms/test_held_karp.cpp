@@ -103,12 +103,17 @@ using engine_of = detail::default_hk_engine<Variant,
 	typename Solver<DistanceMatrix<int>, Variant>::context_type, std::size_t>;
 
 static_assert(std::is_same_v<engine_of<NoCallbacks>, AllSets>, "held_karp(): without a variant nothing prunes, so AllSets");
-static_assert(std::is_same_v<engine_of<service_times::ServiceTimes>, AllSets>, "held_karp(): ServiceTimes filters nothing, so AllSets");
-static_assert(std::is_same_v<engine_of<time_windows::Strict>, ReachableSets>, "held_karp(): Strict filters DPMove, so ReachableSets");
-static_assert(std::is_same_v<engine_of<time_windows::Relaxed>, AllSets>, "held_karp(): Relaxed filters nothing, so AllSets");
-static_assert(std::is_same_v<engine_of<Composed<service_times::ServiceTimes, time_windows::Strict>>, ReachableSets>,
-	"held_karp(): a Composed filters through any of its components, so ReachableSets");
+static_assert(std::is_same_v<engine_of<service_times::ServiceTimes>, AllSets>,
+	"held_karp(): ServiceTimes declares that the cheapest state suffices and filters nothing, so AllSets");
+static_assert(std::is_same_v<engine_of<time_windows::Strict>, ReachableLabels>,
+	"held_karp(): under Strict, a costlier state that departs earlier can complete the tour, so ReachableLabels");
+static_assert(std::is_same_v<engine_of<time_windows::Relaxed>, ReachableLabels>,
+	"held_karp(): under Relaxed, a costlier state that departs earlier can pay less, so ReachableLabels");
+static_assert(std::is_same_v<engine_of<Composed<service_times::ServiceTimes, time_windows::Strict>>, ReachableLabels>,
+	"held_karp(): a Composed needs every non-dominated state when any of its components does, so ReachableLabels");
 static_assert(std::is_same_v<engine_of<StrongPrecedence>, ReachableSets>, "held_karp(): a variant of one's own that filters DPMove gets ReachableSets");
+static_assert(std::is_same_v<engine_of<Composed<service_times::ServiceTimes, StrongPrecedence>>, ReachableSets>,
+	"held_karp(): ServiceTimes and a filter of one's own, so ReachableSets");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -135,20 +140,30 @@ std::optional<int> pipeline_cost(const DistanceMatrix<int>& dist, std::span<cons
 	return s.cost();
 }
 
-// A complete tour from either engine passes every filter of the AppendMove
-// pipeline at the cost reported; both engines reach the same status and cost.
+// A complete tour from any engine passes every filter of the AppendMove
+// pipeline at the cost reported. AllSets and ReachableSets reach the same status
+// and cost. ReachableLabels reaches the optimum or infeasibility they claim, and
+// a tour no costlier than one they report as feasible.
 template <typename... Variant>
 void check_engines_agree(const DistanceMatrix<int>& dist, const Variant&... variant) {
 	Solver all(dist, variant...);
 	Solver reach(dist, variant...);
+	Solver labels(dist, variant...);
 	run_checked(all, [&] { all.held_karp(AllSets{}); });
 	run_checked(reach, [&] { reach.held_karp(ReachableSets{}); });
+	run_checked(labels, [&] { labels.held_karp(ReachableLabels{}); });
 	assert(all.status() == reach.status() && "AllSets and ReachableSets must reach the same status");
 	assert(all.cost() == reach.cost() && "AllSets and ReachableSets must reach the same cost");
-	for (const auto* s : {&all, &reach}) {
-		if (s->status() != SolutionStatus::optimal) continue;
+	if (reach.status() == SolutionStatus::feasible)
+		assert(labels.status() == SolutionStatus::optimal && labels.cost() <= reach.cost()
+			&& "ReachableLabels must reach a tour no costlier than one ReachableSets reports as feasible");
+	else if (reach.status() != SolutionStatus::partial)
+		assert(labels.status() == reach.status() && labels.cost() == reach.cost()
+			&& "ReachableLabels must reach the optimum or infeasibility that ReachableSets claims");
+	for (const auto* s : {&all, &reach, &labels}) {
+		if (s->status() != SolutionStatus::optimal && s->status() != SolutionStatus::feasible) continue;
 		const auto cost = pipeline_cost(dist, s->tour(), variant...);
-		assert(cost && *cost == s->cost() && "an optimal tour must pass the AppendMove pipeline at the cost reported");
+		assert(cost && *cost == s->cost() && "a complete tour must pass the AppendMove pipeline at the cost reported");
 	}
 }
 
@@ -283,7 +298,39 @@ void test_beyond_25_cities() {
 	assert(SolverTestAccess(s).hk_slots() == n && "the chain reaches one set per size");
 }
 
-// No complete tour: both engines report infeasible and leave no tour, even
+// Strict with waiting, Relaxed and ServiceTimes with Strict with waiting,
+// n = 9 and 10, 3 instances per size: held_karp() reaches branch_and_bound()'s
+// status and cost, beyond the reach of brute force.
+void test_against_branch_and_bound() {
+	test::Rng rng{0xA0761D6478BD642Full};
+	for (std::size_t n = 9; n <= 10; ++n) {
+		for (int seed = 0; seed < 3; ++seed) {
+			std::vector<std::size_t> witness(n);
+			std::iota(witness.begin(), witness.end(), std::size_t{0});
+			for (std::size_t i = n - 1; i > 1; --i)
+				std::swap(witness[i], witness[1 + rng() % i]);
+			test::Instance in{random_matrix(rng, n, 30), witness, rng};
+			const auto service = test::make_service(in);
+			const service_times::ServiceTimes times(service);
+			const time_windows::Strict strict(test::make_windows(in, {}, true));
+			const time_windows::Relaxed relaxed(test::make_windows(in, {}, true), 10);
+			const time_windows::Strict strict_after_service(test::make_windows(in, service, true));
+			auto check = [&](const auto& variant) {
+				Solver hk(in.dist, variant);
+				Solver bb(in.dist, variant);
+				run_checked(hk, [&] { hk.held_karp(); });
+				run_checked(bb, [&] { bb.branch_and_bound(); });
+				assert(hk.status() == bb.status() && (hk.status() != SolutionStatus::optimal || hk.cost() == bb.cost())
+					&& "held_karp() must reach branch_and_bound()'s status and cost");
+			};
+			check(strict);
+			check(relaxed);
+			check(Composed(times, strict_after_service));
+		}
+	}
+}
+
+// No complete tour: every engine reports infeasible and leaves no tour, even
 // after a partial one.
 void test_infeasible() {
 	test::Rng rng{0x94D049BB133111EBull};
@@ -299,6 +346,7 @@ void test_infeasible() {
 	};
 	check(AllSets{});
 	check(ReachableSets{});
+	check(ReachableLabels{});
 }
 
 // One solver under Strict alternates engines and sizes; each run matches a
@@ -324,6 +372,8 @@ void test_reuse() {
 	solver.set_matrix(small);
 	run(small, AllSets{});
 	run(small, ReachableSets{});
+	solver.set_matrix(large);
+	run(large, ReachableLabels{});
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +399,11 @@ int main() {
 	std::printf("beyond_25_cities ... ");
 	std::fflush(stdout);
 	test_beyond_25_cities();
+	std::printf("OK\n");
+
+	std::printf("against_branch_and_bound ... ");
+	std::fflush(stdout);
+	test_against_branch_and_bound();
 	std::printf("OK\n");
 
 	std::printf("infeasible ... ");

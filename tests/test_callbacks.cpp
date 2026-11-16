@@ -4,6 +4,7 @@
 
 #include <bit>
 #include <cassert>
+#include <compare>
 #include <cstdio>
 #include <cstddef>
 #include <limits>
@@ -182,6 +183,7 @@ void check_held_karp_logging(Engine engine) {
 void test_protocol_held_karp_logging() {
 	check_held_karp_logging(AllSets{});
 	check_held_karp_logging(ReachableSets{});
+	check_held_karp_logging(ReachableLabels{});
 }
 
 // Stores |set| per DP state; init checks that from_state holds the right one.
@@ -200,6 +202,9 @@ struct SetSizeCheck {
 		if (size_at.size() < states) size_at.resize(states);
 	}
 	void begin_dp(std::size_t state) { size_at[state] = 1; }
+
+	// The set's size makes no state better than another.
+	std::partial_ordering compare_dp(std::size_t) const { return std::partial_ordering::equivalent; }
 
 	template <DistanceSource Dist, typename CityT>
 	void init(const DPMove<CityT>& m, const Dist&) {
@@ -243,6 +248,8 @@ void test_protocol_dp_state_indices() {
 	check(mat6, AllSets{});
 	check(make_mat4(), ReachableSets{});
 	check(mat6, ReachableSets{});
+	check(make_mat4(), ReachableLabels{});
+	check(mat6, ReachableLabels{});
 }
 
 // ---------------------------------------------------------------------------
