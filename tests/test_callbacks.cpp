@@ -142,7 +142,7 @@ void test_protocol_two_opt_replay() {
 	solver.set_tour(bad);
 	assert(solver.cost() == 95 && "set_tour must cost the sum of its edges");
 
-	cb.log.clear();  // set_tour rebuilds through move_prepare alone, without filtering
+	cb.log.clear();  // drops set_tour's replay
 	solver.two_opt();
 	assert(solver.cost() == 80 && "two_opt must apply the improving reversal");
 
@@ -151,6 +151,20 @@ void test_protocol_two_opt_replay() {
 	// evaluation, would break the alternation.
 	assert(checked_replay_pairs(cb.log) > 0
 		&& "two_opt must score its candidates through the variant pipeline");
+}
+
+// set_tour replays the tour as a construction places it: the first city
+// without a filter, then each city and the closing edge filtered.
+void test_protocol_set_tour_logging() {
+	auto mat = make_mat4();
+	LoggingCallbacks cb;
+	Solver solver(mat, cb);
+	std::vector<std::size_t> t = {0, 2, 3, 1};
+	solver.set_tour(t);
+	assert(solver.status() == SolutionStatus::feasible && "LoggingCallbacks rejects nothing");
+	assert(!cb.log.empty() && cb.log[0] == "move_prepare" && "the first city is placed without move_filter");
+	assert(checked_replay_pairs(std::vector<std::string>(cb.log.begin() + 1, cb.log.end())) == 4
+		&& "then 3 cities and the closing edge, each through move_prepare then move_filter");
 }
 
 // ---------------------------------------------------------------------------
@@ -273,8 +287,9 @@ void test_protocol_branch_and_bound_logging() {
 	// Children scored by evaluate_append: 3 at the root, 2 at each of the 3
 	// depth-2 nodes, 1 at each of the 6 depth-3 nodes. Every child is then
 	// appended: 3 + 6 + 6 appends, the last 6 closing the tour through the
-	// pipeline. Plus the start city, and the best tour rebuilt by set_tour
-	// (4 appends and the closing edge, move_prepare alone).
+	// pipeline. Plus the start city, and the best tour rebuilt without filters,
+	// which admitted it when found (4 appends and the closing edge, move_prepare
+	// alone).
 	const std::size_t scored = 3 + 3 * 2 + 6 * 1, appended = 3 + 6 + 6, closed = 6;
 	std::size_t filter_count = 0, prepare_count = 0;
 	for (const auto& e : cb.log) {
@@ -513,19 +528,21 @@ void test_partial_tour_with_callbacks() {
 	assert(solver.status() == SolutionStatus::feasible);
 }
 
-// ---------------------------------------------------------------------------
-// Unit: set_variant method
-// ---------------------------------------------------------------------------
-
-void test_set_variant() {
+// A prefix the variant rejects has no admitted completion: nearest_neighbor
+// keeps it, infeasible.
+void test_resume_rejected_prefix() {
 	auto mat = make_mat4();
-	PenalizeCity1 cb;
-
-	Solver solver(mat, cb);
-	solver.nearest_neighbor();
-
-	// City 1 should not be first pick (penalty makes it unattractive).
-	assert(solver.tour()[1] != 1);
+	std::vector<time_windows::TimeWindow> windows(4, {0.0, 1000.0});
+	windows[1] = {0.0, 40.0};  // 0 2 1 reaches city 1 at 50
+	time_windows::Strict tw(windows);
+	Solver solver(mat, tw);
+	std::vector<std::size_t> prefix = {0, 2, 1};
+	solver.set_tour(prefix);
+	assert(solver.status() == SolutionStatus::infeasible && "set_tour: the prefix reaches city 1 late");
+	solver.nearest_neighbor({.resume_at = 3});
+	assert(solver.status() == SolutionStatus::infeasible && "no completion of a rejected prefix is admitted");
+	assert(solver.tour().size() == 3 && solver.tour()[1] == 2 && solver.tour()[2] == 1
+		&& "the rejected prefix is kept");
 }
 
 // ---------------------------------------------------------------------------
@@ -855,6 +872,7 @@ int main() {
 		{"protocol_nn_n1",              test_protocol_nn_n1},
 		{"protocol_reversal_replay",     test_protocol_reversal_replay},
 		{"protocol_two_opt_replay",      test_protocol_two_opt_replay},
+		{"protocol_set_tour_logging",    test_protocol_set_tour_logging},
 		{"protocol_held_karp_logging",   test_protocol_held_karp_logging},
 		{"protocol_dp_state_indices",    test_protocol_dp_state_indices},
 		{"protocol_branch_and_bound_logging", test_protocol_branch_and_bound_logging},
@@ -871,8 +889,7 @@ int main() {
 		{"partial_tour_with_callbacks",  test_partial_tour_with_callbacks},
 		{"set_tour_full",                test_set_tour_full},
 		{"set_tour_empty",               test_set_tour_empty},
-		// Unit - set_variant
-		{"set_variant",                  test_set_variant},
+		{"resume_rejected_prefix",       test_resume_rejected_prefix},
 		// Unit - asymmetric
 		{"asymmetric_with_callbacks",    test_asymmetric_with_callbacks},
 		// Functional - TSPTW

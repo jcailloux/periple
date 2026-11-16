@@ -534,6 +534,56 @@ void test_held_tour_rotated() {
 		&& "the held tour, rotated to start_city, is kept");
 }
 
+// A held tour bounds the search at its cost under the current variant, and
+// only if the variant admits it.
+void test_held_tour_under_variant() {
+	// 5 cities: the tour 0 1 2 3 4 costs 5, every other tour more; 0 4 1 2 3 costs 6.
+	const std::size_t n = 5;
+	std::vector<int> w(n * n, 10);
+	for (std::size_t i = 0; i < n; ++i) {
+		w[i * n + i] = 0;
+		w[i * n + (i + 1) % n] = 1;
+	}
+	w[0 * n + 4] = 1;
+	w[4 * n + 1] = 1;
+	w[3 * n + 0] = 2;
+	const DistanceMatrix<int> dist(n, w);
+	const std::vector<std::size_t> in_order = {0, 1, 2, 3, 4}, four_first = {0, 4, 1, 2, 3};
+	const std::vector<time_windows::TimeWindow> loose(n, {0.0, 1e9});
+	auto late = loose;
+	late[4] = {0.0, 1.0};  // in_order reaches city 4 at 4, four_first at 1
+
+	// The tour found under loose windows, passed back under late ones, costs 35.
+	time_windows::Relaxed relaxed_loose(loose, 10), relaxed_late(late, 10);
+	Solver relaxed(dist, relaxed_loose);
+	relaxed.held_karp();
+	const std::vector<std::size_t> held(relaxed.tour().begin(), relaxed.tour().end());
+	relaxed.set_variant(relaxed_late);
+	relaxed.set_tour(held);
+	run_checked(relaxed, [&] { relaxed.branch_and_bound(); });
+	assert(relaxed.status() == SolutionStatus::optimal && relaxed.cost() == 6
+		&& "the held tour bounds the search at its cost under the current windows");
+
+	// A tour the windows reject bounds nothing.
+	time_windows::Strict strict_late(late);
+	Solver strict(dist, strict_late);
+	strict.set_tour(in_order);
+	run_checked(strict, [&] { strict.branch_and_bound(); });
+	assert(strict.status() == SolutionStatus::optimal && strict.cost() == 6
+		&& std::equal(four_first.begin(), four_first.end(), strict.tour().begin(), strict.tour().end())
+		&& "a rejected held tour is not the tour to beat");
+
+	// No completion of a rejected prefix is admitted.
+	auto early = loose;
+	early[2] = {0.0, 1.0};  // 0 1 2 reaches city 2 at 2
+	time_windows::Strict strict_early(early);
+	Solver resumed(dist, strict_early);
+	resumed.set_tour(std::vector<std::size_t>{0, 1, 2});
+	run_checked(resumed, [&] { resumed.branch_and_bound({.resume_at = 3}); });
+	assert(resumed.status() == SolutionStatus::infeasible && resumed.tour().empty()
+		&& "resumed from a rejected prefix, the search proves that no tour extends it");
+}
+
 void test_resume_prefix() {
 	Rng rng{0xA54FF53A5F1D36F1ull};
 	for (std::size_t n = 4; n <= 7; ++n) {
@@ -1415,6 +1465,7 @@ int main() {
 		{"unstaged_dimension",             test_unstaged_dimension},
 		{"held_tour_bounds_the_search",    test_held_tour_bounds_the_search},
 		{"held_tour_rotated",              test_held_tour_rotated},
+		{"held_tour_under_variant",        test_held_tour_under_variant},
 		{"resume_prefix",                  test_resume_prefix},
 		{"limit_keeps_prefix",             test_limit_keeps_prefix},
 		{"limit_stops_the_bound",          test_limit_stops_the_bound},

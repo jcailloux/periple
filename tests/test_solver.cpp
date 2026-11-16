@@ -1,4 +1,5 @@
 #include <periple/periple.hpp>
+#include <periple/variants/time_windows.hpp>
 #include <solver_test_access.hpp>
 
 #include <cassert>
@@ -14,6 +15,20 @@ struct StopImmediately {
 		return std::nullopt;
 	}
 };
+
+// 5 cities: the tour 0 1 2 3 4 costs 5, every other tour more; 0 4 1 2 3 costs 6.
+periple::DistanceMatrix<int> five_cities() {
+	const std::size_t n = 5;
+	std::vector<int> w(n * n, 10);
+	for (std::size_t i = 0; i < n; ++i) {
+		w[i * n + i] = 0;
+		w[i * n + (i + 1) % n] = 1;
+	}
+	w[0 * n + 4] = 1;
+	w[4 * n + 1] = 1;
+	w[3 * n + 0] = 2;
+	return periple::DistanceMatrix<int>(n, w);
+}
 
 int main() {
 	periple::DistanceMatrix<int> mat(4, {
@@ -101,6 +116,12 @@ int main() {
 	assert(solver.tour().size() == 2 && "resume_at must truncate the tour");
 	periple::run_checked(solver, [&] { solver.set_matrix(mat); });
 
+	// resume_at over a whole tour judges it as set_tour does.
+	solver.set_tour(manual);
+	solver.nearest_neighbor({.resume_at = 4});
+	assert(solver.status() == periple::SolutionStatus::feasible && solver.cost() == 80
+		&& "resume_at over a whole tour keeps it, closed");
+
 	// --- rotate_to_front ---
 	// A rotation reads the same directed cycle from another starting point, so
 	// the cost is preserved whether or not the matrix is symmetric.
@@ -186,4 +207,72 @@ int main() {
 		"a custom function declares nothing");
 	static_assert(periple::detail::symmetric_by_type<periple::CoordinateDistance<periple::Euclidean<int>, int>>,
 		"a shipped metric makes the coordinate source symmetric by its type");
+
+	// --- set_tour judges the tour under the variant ---
+	// A held tour is infeasible once a move_filter rejects one of its moves, the
+	// closing edge included, and costs its edges.
+	using periple::SolutionStatus;
+	using periple::time_windows::TimeWindow;
+	const auto five = five_cities();
+	const std::vector<std::size_t> in_order = {0, 1, 2, 3, 4}, four_first = {0, 4, 1, 2, 3};
+	const std::vector<TimeWindow> loose(5, {0.0, 1e9});
+	auto late = loose;
+	late[4] = {0.0, 1.0};   // in_order reaches city 4 at 4, four_first at 1
+	auto depot = loose;
+	depot[0] = {0.0, 5.0};  // in_order returns at 5, four_first at 6
+	{
+		periple::time_windows::Strict strict_late(late), strict_depot(depot);
+		periple::Solver judged(five, strict_late);
+		judged.set_tour(four_first);
+		assert(judged.status() == SolutionStatus::feasible && judged.cost() == 6
+			&& "set_tour: a tour every filter admits is feasible");
+		judged.set_tour(in_order);
+		assert(judged.status() == SolutionStatus::infeasible && judged.cost() == 5
+			&& "set_tour: a tour that reaches city 4 late is infeasible, at the cost of its edges");
+		judged.set_tour(std::vector<std::size_t>{0, 4});
+		assert(judged.status() == SolutionStatus::partial && "set_tour: an admitted prefix is partial");
+		judged.set_tour(std::vector<std::size_t>{0, 1, 4});
+		assert(judged.status() == SolutionStatus::infeasible && judged.cost() == 11
+			&& "set_tour: a prefix that reaches city 4 late is infeasible");
+		judged.set_tour(in_order, 42);
+		assert(judged.status() == SolutionStatus::infeasible && judged.cost() == 42
+			&& "set_tour (known cost): judged the same, at the cost given");
+
+		periple::Solver closing(five, strict_depot);
+		closing.set_tour(four_first);
+		assert(closing.status() == SolutionStatus::infeasible && closing.cost() == 6
+			&& "set_tour: a tour that returns to the depot late is infeasible");
+		closing.set_tour(in_order);
+		assert(closing.status() == SolutionStatus::feasible && closing.cost() == 5
+			&& "set_tour: a tour that returns in time is feasible");
+	}
+
+	// --- set_variant clears the solution ---
+	// The tour held was costed and judged under the previous variant: to start
+	// from it, copy it and pass it to set_tour, which judges it under the new one.
+	{
+		periple::time_windows::Relaxed relaxed_loose(loose, 10), relaxed_late(late, 10);
+		periple::Solver relaxed(five, relaxed_loose);
+		relaxed.held_karp();
+		assert(relaxed.status() == SolutionStatus::optimal && relaxed.cost() == 5
+			&& "every window is loose, so the cheapest tour is optimal");
+		const std::vector<std::size_t> held(relaxed.tour().begin(), relaxed.tour().end());
+		periple::run_checked(relaxed, [&] { relaxed.set_variant(relaxed_late); });
+		assert(relaxed.status() == SolutionStatus::none && relaxed.tour().empty() && relaxed.cost() == 0
+			&& "set_variant clears the solution");
+		relaxed.set_tour(held);
+		assert(relaxed.status() == SolutionStatus::feasible && relaxed.cost() == 5 + 10 * 3
+			&& "passed back, the tour is costed under the new windows: 3 late at city 4");
+
+		periple::time_windows::Strict strict_loose(loose), strict_late(late);
+		periple::Solver strict(five, strict_loose);
+		strict.held_karp();
+		const std::vector<std::size_t> kept(strict.tour().begin(), strict.tour().end());
+		strict.set_variant(strict_late);
+		assert(strict.status() == SolutionStatus::none && strict.tour().empty()
+			&& "set_variant clears the solution");
+		strict.set_tour(kept);
+		assert(strict.status() == SolutionStatus::infeasible
+			&& "passed back, the tour is judged under the new windows");
+	}
 }

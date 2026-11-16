@@ -229,7 +229,11 @@ private:
 	void rebuild_position();
 	void invalidate_caches();
 	void check_symmetry() const;
+	template <bool Judge>
+	auto replay_tour(std::span<const city_type> t, bool& admitted) -> cost_type;
 	auto rebuild_and_cost(std::span<const city_type> t) -> cost_type;
+	void adopt_tour(std::span<const city_type> t);
+	void judge_held_tour();
 	void close_tour();
 	void resume_prefix(std::size_t k);
 	void pop_back(cost_type prefix_cost);
@@ -337,6 +341,7 @@ void Solver<Dist, Variant>::set_matrix(const Dist& dist) {
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::set_variant(const Variant& v) {
 	variant_ = &v;
+	clear();
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -422,6 +427,19 @@ auto Solver<Dist, Variant>::distance(city_type i, city_type j) const -> cost_typ
 
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
+	adopt_tour(t);
+	if (n_ > 0) {
+		judge_held_tour();
+	} else {
+		cost_   = {};
+		status_ = SolutionStatus::none;
+		ctx_.reset();
+	}
+}
+
+// Holds t without costing it: copies it, bumps tour_version_, marks its cities.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::adopt_tour(std::span<const city_type> t) {
 	assert(dist_ && "set_tour: no distance source set");
 	const auto total = dist_->size();
 	assert(t.size() <= total && "set_tour: tour exceeds matrix size");
@@ -440,21 +458,12 @@ void Solver<Dist, Variant>::set_tour(std::span<const city_type> t) {
 	std::copy(t.begin(), t.end(), tour_.begin());
 	++tour_version_;
 
-	if (n_ > 0) {
-		cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
-		if (n_ == total) {
-			status_ = SolutionStatus::feasible;
-			std::fill_n(visited_.data(), total, uint8_t{1});
-		} else {
-			status_ = SolutionStatus::partial;
-			std::fill_n(visited_.data(), total, uint8_t{0});
-			for (std::size_t i = 0; i < n_; ++i)
-				visited_[static_cast<std::size_t>(t[i])] = 1;
-		}
+	if (n_ == total) {
+		std::fill_n(visited_.data(), total, uint8_t{1});
 	} else {
-		cost_   = {};
-		status_ = SolutionStatus::none;
-		ctx_.reset();
+		std::fill_n(visited_.data(), total, uint8_t{0});
+		for (std::size_t i = 0; i < n_; ++i)
+			visited_[static_cast<std::size_t>(t[i])] = 1;
 	}
 }
 
@@ -647,10 +656,16 @@ auto Solver<Dist, Variant>::ensure_neighbors(std::size_t k, D& deadline) -> bool
 	return true;
 }
 
-// --- rebuild_and_cost -------------------------------------------------------
+// --- replay_tour / rebuild_and_cost / judge_held_tour -----------------------
 
+// Replays t through the pipeline: init, move_prepare and commit per city, then
+// the closing edge of a complete tour, rebuilding the dimensions. Returns the
+// cost. Judge also asks move_filter about every move after the first and the
+// closing edge, as a construction does, and clears admitted at the first
+// rejection; the replay goes on, so the dimensions cover the tour.
 template <DistanceSource Dist, typename Variant>
-auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> cost_type {
+template <bool Judge>
+auto Solver<Dist, Variant>::replay_tour(std::span<const city_type> t, bool& admitted) -> cost_type {
 	ctx_.reset();
 	cost_type total_cost{};
 
@@ -658,6 +673,8 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 		AppendMove<city_type> move{t[i], (i > 0 ? t[i - 1] : city_type{}), i};
 		ctx_.init(move, *dist_, {t.data(), i}, {position_.data(), i}, total_cost);
 		invoke_prepare(variant(), move, ctx_);
+		if constexpr (Judge)
+			if (i > 0 && admitted) admitted = invoke_filter(variant(), move, ctx_);
 
 		if (i > 0)
 			total_cost += static_cast<cost_type>(edge_delta(t[i - 1], t[i]));
@@ -671,26 +688,47 @@ auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> co
 		AppendMove<city_type> closing{t[0], t.back(), t.size()};
 		ctx_.init(closing, *dist_, {t.data(), t.size()}, {position_.data(), t.size()}, total_cost);
 		invoke_prepare(variant(), closing, ctx_);
+		if constexpr (Judge)
+			if (admitted) admitted = invoke_filter(variant(), closing, ctx_);
 		total_cost += static_cast<cost_type>(edge_delta(t.back(), t[0]));
 	}
 
 	return total_cost;
 }
 
+template <DistanceSource Dist, typename Variant>
+auto Solver<Dist, Variant>::rebuild_and_cost(std::span<const city_type> t) -> cost_type {
+	bool unjudged = true;
+	return replay_tour<false>(t, unjudged);
+}
+
+// Costs tour[0..n_) under the current variant and sets its status: infeasible
+// once a move_filter rejects one of its moves, else feasible when complete,
+// partial otherwise.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::judge_held_tour() {
+	assert(n_ > 0 && "judge_held_tour: an empty tour has status none, not a judgment");
+	bool admitted = true;
+	cost_ = replay_tour<true>(std::span<const city_type>(tour_.data(), n_), admitted);
+	status_ = !admitted                ? SolutionStatus::infeasible
+	        : n_ == dist_->size()      ? SolutionStatus::feasible
+	                                   : SolutionStatus::partial;
+}
+
 // --- resume_prefix / pop_back ------------------------------------------------
 
-// Keeps tour[0..k) and rebuilds what derives from it: cost, dimensions, visited_.
+// Keeps tour[0..k) and rebuilds what derives from it: cost, dimensions,
+// visited_, and its status, judged under the current variant.
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::resume_prefix(std::size_t k) {
 	const auto total = dist_->size();
 	ensure_capacity(total);
 	n_ = k;
 	++tour_version_;
-	cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), k));
+	judge_held_tour();
 	std::fill_n(visited_.data(), total, uint8_t{0});
 	for (std::size_t i = 0; i < k; ++i)
 		visited_[static_cast<std::size_t>(tour_[i])] = 1;
-	status_ = SolutionStatus::partial;
 }
 
 // Removes the last city and restores the cost of the shorter tour. Dimensions
@@ -932,41 +970,8 @@ template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::set_tour(std::span<const city_type> t,
                                      cost_type known_cost)
 {
-	assert(dist_ && "set_tour: no distance source set");
-	const auto total = dist_->size();
-	assert(t.size() <= total && "set_tour: tour exceeds matrix size");
-
-	assert([&] {
-		for (std::size_t i = 0; i < t.size(); ++i) {
-			if (static_cast<std::size_t>(t[i]) >= total) return false;
-			for (std::size_t j = i + 1; j < t.size(); ++j)
-				if (t[i] == t[j]) return false;
-		}
-		return true;
-	}() && "set_tour: invalid tour (duplicate or out-of-bounds city)");
-
-	ensure_capacity(total);
-	n_ = t.size();
-	std::copy(t.begin(), t.end(), tour_.begin());
-	++tour_version_;
-
-	// Rebuild dimensions (the cost is overridden below).
-	if (n_ > 0)
-		rebuild_and_cost(std::span<const city_type>(tour_.data(), n_));
-
+	set_tour(t);
 	cost_ = known_cost;
-
-	if (n_ == total) {
-		status_ = SolutionStatus::feasible;
-		std::fill_n(visited_.data(), total, uint8_t{1});
-	} else if (n_ > 0) {
-		status_ = SolutionStatus::partial;
-		std::fill_n(visited_.data(), total, uint8_t{0});
-		for (std::size_t i = 0; i < n_; ++i)
-			visited_[static_cast<std::size_t>(t[i])] = 1;
-	} else {
-		status_ = SolutionStatus::none;
-	}
 }
 
 // --- CTAD guides ------------------------------------------------------------

@@ -121,6 +121,12 @@ void test_strict(const Algo& algo, const Dist& dist, std::span<const time_window
 
 	assert_valid_tour(dist, solver.tour());
 	assert(tour_respects_windows(dist, solver.tour(), windows));
+
+	// Self-consistency: set_tour admits the tour, at the same cost.
+	Solver verifier(dist, tw);
+	verifier.set_tour(solver.tour());
+	assert(verifier.status() == SolutionStatus::feasible && verifier.cost() == solver.cost()
+		&& "a tour an algorithm returns complete must pass the filters set_tour asks");
 }
 
 template <DistanceSource Dist>
