@@ -189,11 +189,12 @@ public:
 
 	auto nearest_neighbor(NearestNeighborParams params = {}) -> Solver&;
 
-	// Exact, by dynamic programming over visited sets: ReachableSets when the
-	// variant filters DPMove, AllSets otherwise (algorithms/held_karp.hpp).
+	// Exact, by dynamic programming over visited sets: ReachableLabels when the
+	// cheapest state per (set, city) may miss the optimum, else ReachableSets
+	// when the variant filters DPMove, AllSets otherwise (algorithms/held_karp.hpp).
 	auto held_karp(HeldKarpParams params = {}) -> Solver&;
 
-	// Same with the engine passed: AllSets or ReachableSets.
+	// Same with the engine passed: AllSets, ReachableSets or ReachableLabels.
 	template <typename Engine>
 	auto held_karp(Engine engine, HeldKarpParams params = {}) -> Solver&;
 
@@ -253,6 +254,9 @@ private:
 	template <typename D>
 	auto held_karp_reachable(D& deadline) -> Solver&;
 
+	template <typename D>
+	auto held_karp_labels(D& deadline) -> Solver&;
+
 	template <typename Bound, typename Order, typename D>
 	auto branch_and_bound_run(Bound& bound, Order& order, const BranchAndBoundParams& params, D& deadline) -> Solver&;
 
@@ -297,6 +301,7 @@ private:
 	// Algorithm caches (lazy, one per algorithm that needs persistent state)
 	std::optional<HKCache<cost_type>> hk_cache_;
 	std::optional<HKStatesCache<cost_type>> hk_states_cache_;
+	std::optional<HKLabelsCache<cost_type>> hk_labels_cache_;
 	std::optional<BBCache<cost_type, city_type>> bb_cache_;
 };
 
@@ -550,6 +555,7 @@ template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::invalidate_caches() {
 	if (hk_cache_) hk_cache_->reset();
 	if (hk_states_cache_) hk_states_cache_->reset();
+	if (hk_labels_cache_) hk_labels_cache_->reset();
 	if (bb_cache_) bb_cache_->reset();
 	neighbors_k_ = 0;
 	neighbors_built_ = 0;

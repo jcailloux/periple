@@ -1,9 +1,9 @@
-// Known bug, pinned until fixed: held_karp keeps a single state per (set, city),
-// the cheapest. Under time windows, a costlier partial tour that arrives earlier
-// can be the one with the only feasible or the cheapest completion, so held_karp
-// reports infeasible for a feasible instance or returns a costlier tour as
-// optimal. The asserts of check() state the bug; when one fails, the bug is gone:
-// turn this file into an ordinary optimality test.
+// held_karp under time windows, against optima found by brute force. Under
+// waiting or penalties, a costlier partial tour that departs earlier can be the
+// one with the only feasible or the cheapest completion: held_karp() keeps every
+// non-dominated state, and AllSets and ReachableSets, which keep one state per
+// (set, city), claim no optimum or infeasibility they cannot prove. A depot that
+// opens late: the DP departs from city 0 as append() places it.
 
 #include <periple/algorithms/held_karp.hpp>
 #include <periple/distance/matrix.hpp>
@@ -22,43 +22,36 @@ struct Instance {
 	std::vector<time_windows::TimeWindow> windows;
 	bool relaxed;                                   // Relaxed with penalty weight 10, else Strict
 	int optimum;                                    // by brute force
+	SolutionStatus one_state;                       // under AllSets and ReachableSets
 };
 
-template <typename Variant>
-void check(const Instance& instance, const Variant& variant) {
+// held_karp reaches status: at the optimum when optimal, above it when feasible.
+template <typename Variant, typename... Engine>
+void check_under(const Instance& instance, SolutionStatus status, const Variant& variant, Engine... engine) {
 	DistanceMatrix<int> dist(instance.n, instance.weights);
 	Solver solver(dist, variant);
-	solver.held_karp();
-	assert(!(solver.status() == SolutionStatus::optimal && solver.cost() == instance.optimum)
-		&& "known bug gone: held_karp now reaches the optimum, turn this file into an optimality test");
+	solver.held_karp(engine...);
+	assert(solver.status() == status && "held_karp must reach the status expected of its engine");
+	assert((status != SolutionStatus::optimal || solver.cost() == instance.optimum)
+		&& "held_karp must reach the brute-force optimum");
+	assert((status != SolutionStatus::feasible || solver.cost() > instance.optimum)
+		&& "under one state per (set, city), this instance's tour is costlier than the optimum");
+	assert((status != SolutionStatus::partial || solver.tour().size() == 1)
+		&& "without a tour, the solver holds the start city alone");
 }
 
-// Outside the bug, Strict with deadlines only and the depot opening at 25: the DP
-// departs from city 0 as append() places it, where departing at 0 reports a tour
-// of 59 that misses a deadline. Without waiting elsewhere, one state per
-// (set, city) suffices, so every engine must reach the optimum, 60.
-template <typename Engine>
-void check_late_depot(Engine engine) {
-	const Instance late_depot{6,
-		{ 0,  5, 20, 10,  7,  2,
-		 20,  0, 14,  8, 26, 17,
-		 28, 19,  0, 22, 23, 24,
-		 27,  9, 12,  0, 20, 11,
-		  3, 12,  3, 16,  0, 18,
-		 12, 11, 30, 30, 29,  0},
-		{{25, 1e9}, {0, 63}, {0, 47}, {0, 134}, {0, 87}, {0, 104}},
-		false, 60};
-	DistanceMatrix<int> dist(late_depot.n, late_depot.weights);
-	const time_windows::Strict strict(late_depot.windows);
-	Solver solver(dist, strict);
-	solver.held_karp(engine);
-	assert(solver.status() == SolutionStatus::optimal && solver.cost() == late_depot.optimum
-		&& "held_karp must reach the brute-force optimum");
+template <typename... Engine>
+void check(const Instance& instance, SolutionStatus status, Engine... engine) {
+	const std::span<const time_windows::TimeWindow> windows(instance.windows);
+	if (instance.relaxed)
+		check_under(instance, status, time_windows::Relaxed(windows, 10), engine...);
+	else
+		check_under(instance, status, time_windows::Strict(windows), engine...);
 }
 
 int main() {
 	const Instance instances[] = {
-		// Strict with waiting: reported infeasible.
+		// Strict with waiting: one state per (set, city) finds no tour.
 		{7,
 		 { 0, 27, 11,  7, 13, 16,  1,
 		  30,  0,  7,  6, 30, 18,  9,
@@ -68,7 +61,7 @@ int main() {
 		  25,  8, 23,  6,  4,  0, 21,
 		  20,  3, 30,  8, 17, 12,  0},
 		 {{0, 1e9}, {69, 80}, {40, 75}, {33, 61}, {60, 81}, {4, 34}, {89, 125}},
-		 false, 108},
+		 false, 108, SolutionStatus::partial},
 		{7,
 		 { 0, 14, 19, 26,  9,  2, 24,
 		   1,  0, 21, 20, 14, 13, 12,
@@ -78,8 +71,8 @@ int main() {
 		  22, 27, 23, 27,  5,  0,  9,
 		  11, 28, 27, 30, 29,  7,  0},
 		 {{0, 1e9}, {42, 79}, {73, 84}, {34, 66}, {40, 46}, {40, 41}, {32, 67}},
-		 false, 70},
-		// Strict with waiting: a costlier tour reported optimal.
+		 false, 70, SolutionStatus::partial},
+		// Strict with waiting: one state per (set, city) finds a costlier tour.
 		{6,
 		 { 0, 11,  4, 21, 20,  1,
 		  17,  0, 22, 18, 20, 26,
@@ -88,8 +81,8 @@ int main() {
 		   2, 14, 25, 12,  0,  4,
 		  27, 28,  7, 15, 20,  0},
 		 {{0, 1e9}, {39, 86}, {49, 88}, {3, 48}, {47, 136}, {30, 54}},
-		 false, 82},
-		// Relaxed, deadlines only: a costlier tour reported optimal.
+		 false, 82, SolutionStatus::feasible},
+		// Relaxed, deadlines only: one state per (set, city) finds a costlier tour.
 		{6,
 		 { 0, 21, 16, 25,  8, 17,
 		   5,  0,  2, 25, 22, 27,
@@ -98,19 +91,37 @@ int main() {
 		  17, 26, 21,  8,  0, 11,
 		  16, 12,  4, 25, 26,  0},
 		 {{0, 1e9}, {0, 42}, {0, 16}, {0, 36}, {0, 54}, {0, 44}},
-		 true, 118},
+		 true, 118, SolutionStatus::feasible},
+		// Relaxed, deadlines only: one state per (set, city) finds a costlier tour,
+		// losing only states that cheaper ones replace.
+		{5,
+		 { 0, 17, 10, 18, 20,
+		  14,  0, 21, 13,  2,
+		  27, 16,  0, 29, 30,
+		   6, 16, 20,  0,  1,
+		   2, 28, 30, 30,  0},
+		 {{0, 1e9}, {0, 16}, {0, 42}, {0, 74}, {0, 61}},
+		 true, 142, SolutionStatus::feasible},
+		// Strict, deadlines only, the depot opening at 25: departing at 0 instead
+		// reports a tour of 59 that misses a deadline. Without waiting elsewhere,
+		// one state per (set, city) suffices: every engine reaches 60.
+		{6,
+		 { 0,  5, 20, 10,  7,  2,
+		  20,  0, 14,  8, 26, 17,
+		  28, 19,  0, 22, 23, 24,
+		  27,  9, 12,  0, 20, 11,
+		   3, 12,  3, 16,  0, 18,
+		  12, 11, 30, 30, 29,  0},
+		 {{25, 1e9}, {0, 63}, {0, 47}, {0, 134}, {0, 87}, {0, 104}},
+		 false, 60, SolutionStatus::optimal},
 	};
 
-	std::printf("held_karp_time_windows (known bug) ... ");
+	std::printf("held_karp_time_windows ... ");
 	std::fflush(stdout);
-	check_late_depot(AllSets{});
-	check_late_depot(ReachableSets{});
 	for (const auto& instance : instances) {
-		const std::span<const time_windows::TimeWindow> windows(instance.windows);
-		if (instance.relaxed)
-			check(instance, time_windows::Relaxed(windows, 10));
-		else
-			check(instance, time_windows::Strict(windows));
+		check(instance, SolutionStatus::optimal);
+		check(instance, instance.one_state, AllSets{});
+		check(instance, instance.one_state, ReachableSets{});
 	}
-	std::printf("still present\n");
+	std::printf("OK\n");
 }

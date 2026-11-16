@@ -500,15 +500,10 @@ void test_shipped_variant(const Entry& entry, const Algo& algo, const DistanceMa
 		assert(cost && "a complete tour must pass every move_filter of the AppendMove pipeline");
 		assert(*cost == s.cost() && "the reported cost must equal the AppendMove pipeline's");
 	}
-	if constexpr (Algo::is_exact) {
-		if constexpr (Entry::exact_optimal || !std::is_same_v<Algo, AlgoHeldKarp>)
-			assert((best ? s.status() == SolutionStatus::optimal && s.cost() == *best
-			             : s.status() == SolutionStatus::infeasible)
-				&& "an exact algorithm must reach the AppendMove pipeline's optimum, or report infeasible");
-		else
-			assert((!complete || s.status() == SolutionStatus::optimal)
-				&& "an exact algorithm reports a complete tour as optimal");
-	}
+	if constexpr (Algo::is_exact)
+		assert((best ? s.status() == SolutionStatus::optimal && s.cost() == *best
+		             : s.status() == SolutionStatus::infeasible)
+			&& "an exact algorithm must reach the AppendMove pipeline's optimum, or report infeasible");
 }
 
 // Random asymmetric instances, n = 1..7, 20 per size.
