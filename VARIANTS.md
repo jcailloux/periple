@@ -2,6 +2,22 @@
 
 Variants encode problem-specific constraints as callback structs. They plug into the [callback architecture](CALLBACKS.md) without modifying algorithm internals.
 
+| Variant | Rejects tours | Cheapest partial tour per visited set and last city suffices | `held_karp()` engine |
+|---|---|---|---|
+| none | no | yes | `AllSets` |
+| `ServiceTimes` | no | yes | `AllSets` |
+| `time_windows::Strict` | yes, those that miss a window | when no window makes the vehicle wait | `ReachableLabels` |
+| `time_windows::Relaxed` | no, it penalizes lateness instead | no | `ReachableLabels` |
+| `Composed` | when a component does | when every component does | `ReachableLabels` when a component takes it, else `ReachableSets` when a component rejects moves, else `AllSets` |
+
+The last two columns concern `held_karp`: [Dynamic programming](CALLBACKS.md#dynamic-programming) describes its engines and when to pass one.
+
+## Time along the tour
+
+`ServiceTimes`, `Strict` and `Relaxed` time the tour with the `RouteTiming` dimension. The tour starts at its first city at time 0 and leaves it once its window has opened and its service is done. Travel takes the distance as time, and the return to the first city is an arrival like any other, checked against its windows.
+
+The first city is city 0 for `held_karp` and `start_city`, 0 by default, for `nearest_neighbor`, `greedy_construct` and `branch_and_bound`; under a variant, `two_opt` keeps it in place. Put the depot at index 0. For a route that may start and end at any city, add a city 0 at distance 0 to and from every other city, with no service and a window that never closes.
+
 ## Service Times
 
 ```cpp
@@ -26,9 +42,6 @@ Service times do not affect the tour cost directly (cost is based on travel dist
 ```
 
 Each city has one or more time windows `{earliest, latest}`. A vehicle arriving before `earliest` waits; arriving after `latest` is a violation.
-
-> [!WARNING]
-> Under `Relaxed`, or `Strict` with windows that force waiting (`earliest > 0`), `held_karp` may return a costlier tour as `optimal`; under `Strict` with waiting, it may also report `infeasible` for a feasible instance. See the known issues in CHANGELOG.md. `branch_and_bound` is exact under all of them: [Choosing an exact solver](README.md#choosing-an-exact-solver) gives its call for your distances.
 
 ### TimeWindow
 
@@ -216,6 +229,8 @@ struct MyVariant {
 };
 ```
 
+`held_karp()` then creates only the visited sets that accepted moves reach: phrase the `DPMove` filter to reject as early as the constraint allows ([Filter strength](CALLBACKS.md#filter-strength)).
+
 ## Writing your own dimension
 
 A dimension is a struct satisfying the `Dimension` concept:
@@ -234,6 +249,10 @@ Additionally, a dimension should provide (detected by overload resolution, not t
 - `commit(Move)` -- write tentative state to committed storage, one slot per position: `branch_and_bound` backtracks by letting the next append overwrite the freed slot.
 - `begin_staging(from)`, `discard_staging()`, `save_staging(to)`, `commit_staging(to)` -- required if the dimension commits state on `AppendMove`: a replay (`two_opt`) evaluates candidates without overwriting the committed tour. Store committed values in a `periple::StagedVector` and forward these calls to it, as `RouteTiming` does.
 - `snapshot(Move) -> SnapshotType` and `restore(SnapshotType)` -- save and restore tentative state for constructive algorithms (evaluate/snapshot/restore pattern).
+- `resize_dp(states)`, `begin_dp(state)` and `compare_dp(state)` -- required if the dimension commits state on `DPMove`. `held_karp` stores DP states at indices it assigns: `init` reads the state stored at `m.from_state`, `commit` writes it at `m.to_state`.
+  - `resize_dp` makes room for `states` indices as the DP grows, keeping the states stored.
+  - `begin_dp` stores at `state` the tentative state that placing the first city leaves, after `init` and `move_prepare` of its `AppendMove`.
+  - `compare_dp` returns a `std::partial_ordering` of the tentative state against the one stored at `state`: `less` when the tentative state is never worse for the rest of the tour, `greater` when the stored one is never worse, `equivalent` when they are interchangeable, `unordered` otherwise. `held_karp` keeps the partial tours that no other dominates by it ([Dynamic programming](CALLBACKS.md#dynamic-programming)).
 
 Each method is overloaded per move type (`AppendMove`, `DPMove`), and an algorithm compiles with the dimensions that handle the move types it emits. See `RouteTiming` in `core/dimensions/route_timing.hpp` for a complete example.
 
@@ -299,7 +318,7 @@ struct CapacityConstraint {
 };
 ```
 
-This pair supports construction, local search and `branch_and_bound`. `DPMove` overloads, as in `RouteTiming`, extend it to `held_karp`.
+This pair supports construction, local search and `branch_and_bound`. `DPMove` overloads and the DP state methods, as in `RouteTiming`, extend it to `held_karp`.
 
 Or combine dimensions:
 

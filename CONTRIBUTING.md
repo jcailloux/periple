@@ -67,6 +67,7 @@ The Solver owns a `context_type` deduced from the variant's `dimension` typedef:
 - `cost()` -- the cost so far
 - `init()`, `commit()`, `snapshot()`, `restore()` -- lifecycle methods
 - `begin_staging()`, `discard_staging()`, `save_staging()`, `commit_staging()` -- replay staging, forwarded to the dimensions that provide it
+- `resize_dp()`, `begin_dp()`, `compare_dp()` -- DP state storage and dominance, forwarded to the dimensions that keep DP state
 
 ### Algorithm structure
 
@@ -280,7 +281,7 @@ A PR adding an algorithm is complete when:
 
 If the algorithm needs persistent state across calls (DP tables, populations, etc.), follow these three steps:
 
-**a) Create a cache file** in `core/caches/`. The struct is templated on `CostT`/`CityT` and provides a `reset()` method:
+**a) Create a cache file** in `core/caches/`. The struct is templated on the types it stores and provides a `reset()` method:
 
 ```cpp
 // core/caches/lk_cache.hpp
@@ -366,7 +367,7 @@ Provide callbacks for `AppendMove` and `DPMove`. A constraint that an exact DP c
 
 ### Step 2: Write tests
 
-Add an entry to `tests/algorithms/variant_registry.hpp`: `test_variants` then runs the variant under every registered algorithm, against the brute-force optimum of the `AppendMove` pipeline. `exact_optimal = false` marks a [known bug](#known-bugs). Add focused tests in `tests/` for behaviors specific to the variant.
+Add an entry to `tests/algorithms/variant_registry.hpp`: `test_variants` then runs the variant under every registered algorithm, against the brute-force optimum of the `AppendMove` pipeline. Pin its `held_karp()` engine with a `static_assert` in `tests/algorithms/test_held_karp.cpp`. A variant with a dimension that keeps DP state gets `ReachableLabels`; if the cheapest state per visited set and last city always settles the rest of the tour under it, specialize `detail::cheapest_state_suffices` (`core/moves/dp_move.hpp`), as `ServiceTimes` does. Add focused tests in `tests/` for behaviors specific to the variant.
 
 ### Step 3: Document
 
@@ -399,6 +400,7 @@ tests/
         test_limits.cpp
         variant_registry.hpp
         test_two_opt.cpp
+        test_held_karp.cpp
         test_held_karp_time_windows.cpp
         test_branch_and_bound.cpp
 ```
@@ -432,7 +434,7 @@ A misuse caught by an assert is tested in `tests/death/`, one program per case, 
 
 ### Known bugs
 
-A known bug is pinned by a test that asserts the wrong result, in its own executable, with a comment saying so (see `test_held_karp_time_windows.cpp`). It fails once the bug is fixed: turn it into an ordinary test then. List the bug under `### Known issues` in `CHANGELOG.md`.
+A known bug is pinned by a test that asserts the wrong result, in its own executable, with a comment saying so. It fails once the bug is fixed: turn it into an ordinary test then. List the bug under `### Known issues` in `CHANGELOG.md`.
 
 ## Performance guidelines
 
