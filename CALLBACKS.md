@@ -240,12 +240,12 @@ periple::Solver solver(matrix, variant);
 solver.branch_and_bound(periple::time_windows::DeadlineBound(periple::SpanningArborescenceBound{}));
 ```
 
-A complete tour held on entry is the first tour to beat. Without a variant any tour counts, rotated to `start_city`. With a variant the cost depends on the start, so the tour must start at `start_city`: call `clear()` first otherwise. `resume_at` keeps `tour[0..resume_at)` and searches its completions.
+A tour held `feasible` or `optimal` on entry is the first tour to beat. Without a variant any tour counts, rotated to `start_city`. With a variant the cost depends on the start, so the tour must start at `start_city`: call `clear()` first otherwise. `resume_at` keeps `tour[0..resume_at)` and searches its completions.
 
 | End of search | Status |
 |---|---|
 | tree exhausted | `optimal`, or `feasible` if `resume_at > 1`: optimal among the prefix's completions |
-| tree exhausted, no tour | `infeasible`, empty tour |
+| tree exhausted without a tour, or a `resume_at` prefix that `move_filter` rejects | `infeasible`, empty tour |
 | `max_nodes` or `time_limit` reached | `feasible` with the best tour, or else `partial` with the prefix it started from |
 
 `time_limit` applies between nodes and within a strategy call that takes `stop`; a call without it runs to its end.
@@ -286,7 +286,7 @@ solver.set_tour(prefix);                                   // status = partial
 solver.nearest_neighbor({.resume_at = solver.tour().size()});  // completes from the prefix
 ```
 
-When resuming, `rebuild_and_cost` replays the prefix through the full pipeline (init + prepare + commit for each city), reconstructing dimension state and cost. No manual state management is needed. `branch_and_bound` takes `resume_at` too, and searches the prefix's completions.
+`set_tour` and `resume_at` replay the tour through the pipeline, which rebuilds its cost and the dimensions: no manual state management is needed. As in a construction, every city after the first, and the closing edge of a complete tour, goes through `move_filter`. A tour it rejects is `infeasible`, and `cost()` still covers all of it. No completion makes a rejected prefix admissible: resumed from one, `nearest_neighbor` and `greedy_construct` return at once, `infeasible`, with the prefix. `branch_and_bound` takes `resume_at` too, and searches the prefix's completions ([statuses](#branch_and_bound)).
 
 ## Local search and replay
 
