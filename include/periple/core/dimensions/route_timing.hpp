@@ -92,7 +92,7 @@ struct RouteTiming {
 		if (dp_departures.size() < states) dp_departures.resize(states);
 	}
 
-	void begin_dp(std::size_t state) { dp_departures[state] = 0.0; }
+	void begin_dp(std::size_t state) { dp_departures[state] = departure; }
 
 	template <DistanceSource Dist, typename CityT>
 	void init(const DPMove<CityT>& m, const Dist& dist) {

@@ -76,6 +76,16 @@ auto Solver<Dist, Variant>::held_karp(Engine, HeldKarpParams params) -> Solver& 
 	});
 }
 
+// Stores at root the start city's state as append() leaves it, so a tour's DP
+// cost and its replay by rebuild_and_cost start from the same state.
+template <DistanceSource Dist, typename Variant>
+void Solver<Dist, Variant>::start_dp(std::size_t root) {
+	AppendMove<city_type> start{city_type{0}, city_type{}, 0};
+	ctx_.init(start, *dist_, {tour_.data(), 0}, {position_.data(), 0}, cost_type{});
+	invoke_prepare(variant(), start, ctx_);
+	ctx_.begin_dp(root);
+}
+
 template <DistanceSource Dist, typename Variant>
 template <typename D>
 auto Solver<Dist, Variant>::held_karp_all_sets(D& deadline) -> Solver& {
@@ -117,7 +127,7 @@ auto Solver<Dist, Variant>::held_karp_all_sets(D& deadline) -> Solver& {
 	// Base: start at city 0
 	dp[idx(1, 0)] = cost_type{};
 	ctx_.resize_dp(table_sz);
-	ctx_.begin_dp(idx(1, 0));
+	start_dp(idx(1, 0));
 
 	const auto& v = variant();
 
@@ -256,7 +266,7 @@ auto Solver<Dist, Variant>::held_karp_reachable(D& deadline) -> Solver& {
 	// Base: slot 0 is {0}, start at city 0
 	new_slot(1);
 	c.cost[0] = cost_type{};
-	ctx_.begin_dp(0);
+	start_dp(0);
 
 	const auto& v = variant();
 	const std::size_t full = ~std::size_t{0} >> (mask_bits - n_);

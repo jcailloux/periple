@@ -164,16 +164,18 @@ void check_held_karp_logging(Engine engine) {
 	solver.held_karp(engine);
 	assert(solver.status() == SolutionStatus::optimal && "LoggingCallbacks rejects nothing, so held_karp must succeed");
 
-	// Forward: 3 moves from {0}, 2 from each of the 3 one-city states, 1 from
-	// each of the 6 two-city states; then 3 closing moves.
+	// City 0 placed as append() places it; then forward: 3 moves from {0}, 2
+	// from each of the 3 one-city states, 1 from each of the 6 two-city states;
+	// then 3 closing moves.
 	const std::size_t dp_moves = 3 + 3 * 2 + 6 * 1 + 3;
-	assert(cb.log.size() == 2 * dp_moves + 5
-		&& "expected 18 DP prepare/filter pairs, then the tour rebuilt as 4 appends and the closing edge");
-	for (std::size_t k = 0; k < 2 * dp_moves; k += 2) {
+	assert(cb.log.size() == 1 + 2 * dp_moves + 5
+		&& "expected the start city, 18 DP prepare/filter pairs, then the tour rebuilt as 4 appends and the closing edge");
+	assert(cb.log[0] == "move_prepare" && "the DP starts from city 0 as append() places it");
+	for (std::size_t k = 1; k < 1 + 2 * dp_moves; k += 2) {
 		assert(cb.log[k] == "dp_move_prepare" && "expected dp_move_prepare to open each pair");
 		assert(cb.log[k + 1] == "dp_move_filter" && "expected dp_move_filter to close each pair");
 	}
-	for (std::size_t k = 2 * dp_moves; k < cb.log.size(); ++k)
+	for (std::size_t k = 1 + 2 * dp_moves; k < cb.log.size(); ++k)
 		assert(cb.log[k] == "move_prepare" && "rebuild_and_cost replays the tour through move_prepare alone");
 }
 
