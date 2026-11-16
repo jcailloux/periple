@@ -53,6 +53,7 @@ auto Solver<Dist, Variant>::greedy_construct_run(
 		assert(params.resume_at <= n_
 			&& "greedy_construct: resume_at exceeds current tour length");
 		resume_prefix(params.resume_at);
+		if (status_ == SolutionStatus::infeasible) return *this;  // so is every completion
 	} else {
 		if (try_trivial()) return *this;
 		clear();

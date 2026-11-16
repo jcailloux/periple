@@ -143,6 +143,12 @@ auto Solver<Dist, Variant>::branch_and_bound_run(
 		assert(params.resume_at < total && "branch_and_bound: resume_at leaves no city to place");
 		if (held) keep(0);  // it extends its own prefix
 		resume_prefix(params.resume_at);
+		if (status_ == SolutionStatus::infeasible) {  // so is every completion
+			n_ = 0;
+			cost_ = {};
+			++tour_version_;
+			return *this;
+		}
 	} else {
 		assert(params.start_city < total && "branch_and_bound: start_city out of bounds");
 		if (held) {
@@ -270,7 +276,9 @@ auto Solver<Dist, Variant>::branch_and_bound_run(
 	const bool exhausted = search();
 
 	if (found) {
-		set_tour(std::span<const city_type>(ws.best.data(), total));
+		// Admitted when found: rebuilt without asking the filters again.
+		adopt_tour(std::span<const city_type>(ws.best.data(), total));
+		cost_ = rebuild_and_cost(std::span<const city_type>(tour_.data(), total));
 		// With a longer fixed prefix, the tour is optimal among its completions only.
 		status_ = (exhausted && root == 1) ? SolutionStatus::optimal : SolutionStatus::feasible;
 	} else if (exhausted) {
