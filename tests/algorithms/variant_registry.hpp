@@ -58,8 +58,10 @@ inline std::vector<time_windows::TimeWindow> make_windows(Instance& in, std::spa
 	return windows;
 }
 
+// The depot's service is fixed: a tour departs from it after a service, and
+// the random draws, the other entries' instances with them, stay as they were.
 inline std::vector<double> make_service(Instance& in) {
-	std::vector<double> service(in.dist.size(), 0.0);
+	std::vector<double> service(in.dist.size(), 2.0);
 	for (std::size_t c = 1; c < service.size(); ++c) service[c] = in.rng.below(5);
 	return service;
 }

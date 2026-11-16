@@ -2,8 +2,8 @@
 // the cheapest. Under time windows, a costlier partial tour that arrives earlier
 // can be the one with the only feasible or the cheapest completion, so held_karp
 // reports infeasible for a feasible instance or returns a costlier tour as
-// optimal. The asserts state the bug; when one fails, the bug is gone: turn this
-// file into an ordinary optimality test.
+// optimal. The asserts of check() state the bug; when one fails, the bug is gone:
+// turn this file into an ordinary optimality test.
 
 #include <periple/algorithms/held_karp.hpp>
 #include <periple/distance/matrix.hpp>
@@ -31,6 +31,29 @@ void check(const Instance& instance, const Variant& variant) {
 	solver.held_karp();
 	assert(!(solver.status() == SolutionStatus::optimal && solver.cost() == instance.optimum)
 		&& "known bug gone: held_karp now reaches the optimum, turn this file into an optimality test");
+}
+
+// Outside the bug, Strict with deadlines only and the depot opening at 25: the DP
+// departs from city 0 as append() places it, where departing at 0 reports a tour
+// of 59 that misses a deadline. Without waiting elsewhere, one state per
+// (set, city) suffices, so every engine must reach the optimum, 60.
+template <typename Engine>
+void check_late_depot(Engine engine) {
+	const Instance late_depot{6,
+		{ 0,  5, 20, 10,  7,  2,
+		 20,  0, 14,  8, 26, 17,
+		 28, 19,  0, 22, 23, 24,
+		 27,  9, 12,  0, 20, 11,
+		  3, 12,  3, 16,  0, 18,
+		 12, 11, 30, 30, 29,  0},
+		{{25, 1e9}, {0, 63}, {0, 47}, {0, 134}, {0, 87}, {0, 104}},
+		false, 60};
+	DistanceMatrix<int> dist(late_depot.n, late_depot.weights);
+	const time_windows::Strict strict(late_depot.windows);
+	Solver solver(dist, strict);
+	solver.held_karp(engine);
+	assert(solver.status() == SolutionStatus::optimal && solver.cost() == late_depot.optimum
+		&& "held_karp must reach the brute-force optimum");
 }
 
 int main() {
@@ -80,6 +103,8 @@ int main() {
 
 	std::printf("held_karp_time_windows (known bug) ... ");
 	std::fflush(stdout);
+	check_late_depot(AllSets{});
+	check_late_depot(ReachableSets{});
 	for (const auto& instance : instances) {
 		const std::span<const time_windows::TimeWindow> windows(instance.windows);
 		if (instance.relaxed)
