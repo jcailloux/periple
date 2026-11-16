@@ -245,6 +245,8 @@ private:
 	template <typename Strategy, typename D>
 	auto greedy_construct_run(Strategy& strategy, const ConstructParams& params, D& deadline) -> Solver&;
 
+	void start_dp(std::size_t root);
+
 	template <typename D>
 	auto held_karp_all_sets(D& deadline) -> Solver&;
 
