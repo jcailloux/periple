@@ -77,6 +77,11 @@ public:
 		return s_.hk_states_cache_ ? s_.hk_states_cache_->masks.size() : 0;
 	}
 
+	// Visited sets that ReachableLabels created in its last run.
+	[[nodiscard]] std::size_t hk_label_slots() const {
+		return s_.hk_labels_cache_ ? s_.hk_labels_cache_->masks.size() : 0;
+	}
+
 private:
 	const Solver<Dist, Variant>& s_;
 };

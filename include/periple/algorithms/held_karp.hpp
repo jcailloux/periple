@@ -10,9 +10,12 @@
 // Dumas, Desrosiers, Gelinas, Solomon (1995), "An Optimal Algorithm for the Traveling
 //   Salesman Problem with Time Windows"
 //   -- forward DP whose step s generates the paths of length s; per (set, city), only
-//      the states that no other dominates, section 1
+//      the states that no other dominates, section 1; a state is dropped once an
+//      unvisited city or the end of the tour can no longer be reached by its deadline,
+//      even by the shortest path without windows, test 1
 
 #include <periple/core/solver.hpp>
+#include <periple/core/latest_departures.hpp>
 #include <periple/core/moves/dp_move.hpp>
 
 #include <algorithm>
@@ -25,6 +28,7 @@
 #include <limits>
 #include <span>
 #include <type_traits>
+#include <vector>
 
 namespace periple {
 
@@ -124,6 +128,39 @@ void Solver<Dist, Variant>::start_dp(std::size_t root) {
 	ctx_.begin_dp(root);
 }
 
+// Under due times, the latest departures toward them, for dp_dead; false if
+// stop fires first.
+template <DistanceSource Dist, typename Variant>
+template <typename Stop>
+bool Solver<Dist, Variant>::start_dp_deadlines(Stop& stop) {
+	if (!hk_due_) hk_due_.emplace();
+	std::vector<double> due(n_);
+	detail::dp_deadlines<Variant>::due_times(variant(), due);
+	const auto distance = [this](std::size_t a, std::size_t b) {
+		return (*dist_)(static_cast<city_type>(a), static_cast<city_type>(b));
+	};
+	if (!detail::build_latest_departures(*hk_due_, distance, due, stop)) return false;
+	detail::build_least_slacks(*hk_due_, n_);
+	return true;
+}
+
+// Whether the state just prepared, at j with the cities of next, can no longer
+// reach an unvisited city or city 0 in time; false without due times. Such a
+// state completes no tour: the engines test it only where they would store it
+// or count it lost, and do neither. Inline: without it, GCC keeps it out of
+// line, one call per state tested.
+template <DistanceSource Dist, typename Variant>
+inline bool Solver<Dist, Variant>::dp_dead(std::size_t j, std::size_t next) const {
+	if constexpr (detail::dp_deadlines<Variant>::value) {
+		const double departure = detail::dp_deadlines<Variant>::departure(ctx_);
+		return detail::may_miss_a_due_time(*hk_due_, j, departure)
+			&& detail::misses_a_due_time(*hk_due_, n_, j, departure, 0,
+				[next](std::size_t c) { return ((next >> c) & 1) == 0; });
+	} else {
+		return false;
+	}
+}
+
 template <DistanceSource Dist, typename Variant>
 template <typename D>
 auto Solver<Dist, Variant>::held_karp_all_sets(D& deadline) -> Solver& {
@@ -141,6 +178,8 @@ auto Solver<Dist, Variant>::held_karp_all_sets(D& deadline) -> Solver& {
 	n_ = dist_->size();
 	assert(n_ <= 25 && "held_karp: AllSets holds 2^(n-1) sets, up to 25 cities; ReachableSets takes up to 64");
 	ensure_capacity(n_);
+	if constexpr (detail::dp_deadlines<Variant>::value)
+		if (!start_dp_deadlines(stop_fill)) return give_up();
 
 	if (!hk_cache_) hk_cache_.emplace();
 
@@ -199,8 +238,10 @@ auto Solver<Dist, Variant>::held_karp_all_sets(D& deadline) -> Solver& {
 				std::size_t S_next = S | (std::size_t{1} << j);
 				cost_type new_cost = dp[idx(S, i)] + edge_cost;
 				if constexpr (detail::needs_labels<Variant>::value)
-					lost = lost || detail::loses_state(ctx_, new_cost, dp[idx(S_next, j)], idx(S_next, j));
+					lost = lost || (detail::loses_state(ctx_, new_cost, dp[idx(S_next, j)], idx(S_next, j))
+						&& !dp_dead(j, S_next));
 				if (new_cost < dp[idx(S_next, j)]) {
+					if (dp_dead(j, S_next)) continue;
 					dp[idx(S_next, j)]     = new_cost;
 					parent[idx(S_next, j)] = static_cast<std::uint8_t>(i);
 					move.to_state = idx(S_next, j);
@@ -282,6 +323,8 @@ auto Solver<Dist, Variant>::held_karp_reachable(D& deadline) -> Solver& {
 	n_ = dist_->size();
 	assert(n_ <= mask_bits && "held_karp: instance too large (visited sets are std::size_t bitmasks)");
 	ensure_capacity(n_);
+	if constexpr (detail::dp_deadlines<Variant>::value)
+		if (!start_dp_deadlines(stop)) return give_up();
 
 	if (!hk_states_cache_) hk_states_cache_.emplace();
 	auto& c = *hk_states_cache_;
@@ -353,17 +396,21 @@ auto Solver<Dist, Variant>::held_karp_reachable(D& deadline) -> Solver& {
 				const auto edge_cost = static_cast<cost_type>(static_cast<double>((*dist_)(ci, cj)) + ctx_.cost_delta);
 				const cost_type new_cost = c.cost[from_state] + edge_cost;
 
-				// Slot of S | {j}, created by the first accepted move into it.
+				// Slot of S | {j}, created by the first accepted move into it that
+				// leaves a live state.
 				auto& t = c.target_slot[j];
 				if (t == unresolved) {
 					const std::size_t next = S | (std::size_t{1} << j);
+					if (dp_dead(j, next)) continue;
 					t = c.index.find_or_insert(next, [&] { return new_slot(next); });
 				}
 
 				const std::size_t to_state = std::size_t{t} * n_ + j;
 				if constexpr (detail::needs_labels<Variant>::value)
-					lost = lost || detail::loses_state(ctx_, new_cost, c.cost[to_state], to_state);
+					lost = lost || (detail::loses_state(ctx_, new_cost, c.cost[to_state], to_state)
+						&& !dp_dead(j, S | (std::size_t{1} << j)));
 				if (new_cost < c.cost[to_state]) {
+					if (dp_dead(j, S | (std::size_t{1} << j))) continue;
 					c.cost[to_state] = new_cost;
 					c.pred[to_state] = static_cast<std::uint32_t>(from_state);
 					move.to_state = to_state;
@@ -446,6 +493,8 @@ auto Solver<Dist, Variant>::held_karp_labels(D& deadline) -> Solver& {
 	n_ = dist_->size();
 	assert(n_ <= mask_bits && "held_karp: instance too large (visited sets are std::size_t bitmasks)");
 	ensure_capacity(n_);
+	if constexpr (detail::dp_deadlines<Variant>::value)
+		if (!start_dp_deadlines(stop)) return give_up();
 
 	if (!hk_labels_cache_) hk_labels_cache_.emplace();
 	auto& c = *hk_labels_cache_;
@@ -570,6 +619,9 @@ auto Solver<Dist, Variant>::held_karp_labels(D& deadline) -> Solver& {
 						assert(!dropped_one && "held_karp: a dominated label cannot dominate a kept one");
 						continue;
 					}
+					// The labels it dominates leave the same cities open and depart no
+					// earlier: dead with it, they are no loss.
+					if (dp_dead(j, S | (std::size_t{1} << j))) continue;
 					if (into == labels) into = new_label();
 
 					c.cost[into] = new_cost;

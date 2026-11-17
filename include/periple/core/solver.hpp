@@ -8,6 +8,7 @@
 #include <periple/core/active_queue.hpp>
 #include <periple/core/local_search_mode.hpp>
 #include <periple/core/deadline.hpp>
+#include <periple/core/latest_departures.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -252,6 +253,11 @@ private:
 
 	void start_dp(std::size_t root);
 
+	template <typename Stop>
+	bool start_dp_deadlines(Stop& stop);
+
+	bool dp_dead(std::size_t j, std::size_t next) const;
+
 	template <typename D>
 	auto held_karp_all_sets(D& deadline) -> Solver&;
 
@@ -306,6 +312,7 @@ private:
 	std::optional<HKCache<cost_type>> hk_cache_;
 	std::optional<HKStatesCache<cost_type>> hk_states_cache_;
 	std::optional<HKLabelsCache<cost_type>> hk_labels_cache_;
+	std::optional<detail::LatestDepartures> hk_due_;  // under due times, rebuilt by each held_karp engine
 	std::optional<BBCache<cost_type, city_type>> bb_cache_;
 };
 
