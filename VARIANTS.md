@@ -85,7 +85,7 @@ periple::Solver solver(matrix, tw);
 solver.nearest_neighbor();
 ```
 
-If all candidates are rejected at a given step, construction stops (partial tour). The Strict variant uses `RouteTiming` to track arrival and departure times.
+If all candidates are rejected at a given step, construction stops (partial tour). If the return to the first city is rejected, the tour is complete and `infeasible`, and `cost()` covers it all. The Strict variant uses `RouteTiming` to track arrival and departure times.
 
 Local search applies the same filter. `two_opt` scores a candidate reversal by replaying the affected suffix, so a reversal that would violate a window is rejected and the tour stays feasible:
 
