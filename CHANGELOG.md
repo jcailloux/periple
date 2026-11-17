@@ -36,6 +36,8 @@
 - `set_variant` clears the solution, as `set_matrix` does, where it kept the tour with the cost and status computed under the former variant. To start from the tour, copy it and pass it to `set_tour` after `set_variant`.
 - `ServiceTimes` requires nonnegative service times, asserted in debug builds.
 - A dimension that commits `DPMove` state provides `resize_dp(states)`, `begin_dp(state)` and `compare_dp(state)`, and stores its state at `DPMove::from_state` and `to_state` instead of indexing by `set`. `RouteTiming::dp_n_` is removed.
+- `find_package(periple 0.1)` no longer accepts 0.2.0: a requested version must have the installed major and minor version, where the major sufficed, and a version range must lie within one minor version.
+- The CMake package installs to `share/cmake/periple` instead of `lib/cmake/periple`. Installed over 0.1.0, remove the former directory: `find_package(periple)` without a version, or with 0.1, still finds it first, with the new headers.
 
 ### Fixed
 
@@ -50,6 +52,7 @@
 - `held_karp` under a `RouteTiming` variant, after `set_matrix` to a larger instance, indexed past the end of its DP departures.
 - `set_tour` and `resume_at` held a tour as `feasible` or `partial` even when `move_filter` rejects one of its moves, and `nearest_neighbor` resumed from a rejected prefix could return as `feasible` a tour that violates the variant. Both now replay the tour through `move_filter` as a construction does and hold a rejected tour as `infeasible`; resumed from one, `nearest_neighbor` and `greedy_construct` return at once.
 - `nearest_neighbor` and `greedy_construct` with `resume_at` equal to `size()` left the complete tour `partial`.
+- `find_package(periple)` could miss an installed periple from a project of another architecture or pointer size (32 or 64 bits) than the build that installed it; a header-only library depends on neither.
 
 ## v0.1.0 (2026-09-24)
 
