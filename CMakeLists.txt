@@ -23,24 +23,25 @@ install(TARGETS periple EXPORT periple-targets)
 install(EXPORT periple-targets
     FILE periple-targets.cmake
     NAMESPACE periple::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/periple
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/cmake/periple
 )
 
 configure_package_config_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/periple-config.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/periple-config.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/periple
+    INSTALL_DESTINATION ${CMAKE_INSTALL_DATADIR}/cmake/periple
 )
 
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/periple-config-version.cmake
-    COMPATIBILITY SameMajorVersion
+    COMPATIBILITY SameMinorVersion
+    ARCH_INDEPENDENT
 )
 
 install(FILES
     ${CMAKE_CURRENT_BINARY_DIR}/periple-config.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/periple-config-version.cmake
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/periple
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/cmake/periple
 )
 
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
