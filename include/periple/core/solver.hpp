@@ -384,7 +384,7 @@ auto Solver<Dist, Variant>::tour() const -> std::span<const city_type> {
 
 template <DistanceSource Dist, typename Variant>
 auto Solver<Dist, Variant>::position() const -> std::span<const city_type> {
-	return {position_.data(), n_};
+	return {position_.data(), n_ > 0 ? dist_->size() : 0};  // indexed by city
 }
 
 template <DistanceSource Dist, typename Variant>
@@ -674,11 +674,12 @@ template <DistanceSource Dist, typename Variant>
 template <bool Judge>
 auto Solver<Dist, Variant>::replay_tour(std::span<const city_type> t, bool& admitted) -> cost_type {
 	ctx_.reset();
+	const auto total = dist_->size();
 	cost_type total_cost{};
 
 	for (std::size_t i = 0; i < t.size(); ++i) {
 		AppendMove<city_type> move{t[i], (i > 0 ? t[i - 1] : city_type{}), i};
-		ctx_.init(move, *dist_, {t.data(), i}, {position_.data(), i}, total_cost);
+		ctx_.init(move, *dist_, {t.data(), i}, {position_.data(), total}, total_cost);
 		invoke_prepare(variant(), move, ctx_);
 		if constexpr (Judge)
 			if (i > 0 && admitted) admitted = invoke_filter(variant(), move, ctx_);
@@ -691,9 +692,9 @@ auto Solver<Dist, Variant>::replay_tour(std::span<const city_type> t, bool& admi
 	}
 
 	// Closing edge (complete tour only).
-	if (t.size() == dist_->size() && t.size() > 1) {
+	if (t.size() == total && t.size() > 1) {
 		AppendMove<city_type> closing{t[0], t.back(), t.size()};
-		ctx_.init(closing, *dist_, {t.data(), t.size()}, {position_.data(), t.size()}, total_cost);
+		ctx_.init(closing, *dist_, {t.data(), t.size()}, {position_.data(), total}, total_cost);
 		invoke_prepare(variant(), closing, ctx_);
 		if constexpr (Judge)
 			if (admitted) admitted = invoke_filter(variant(), closing, ctx_);
@@ -777,7 +778,7 @@ auto Solver<Dist, Variant>::evaluate_append(city_type city) const -> std::option
 	assert(n_ > 0 && "evaluate_append: tour must have at least one city");
 
 	AppendMove<city_type> move{city, tour_[n_ - 1], n_};
-	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
+	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), dist_->size()}, cost_);
 	invoke_prepare(variant(), move, ctx_);
 	if (!invoke_filter(variant(), move, ctx_))
 		return std::nullopt;
@@ -799,7 +800,7 @@ auto Solver<Dist, Variant>::append(city_type city) -> Solver& {
 		std::fill_n(visited_.data(), total, uint8_t{0});
 
 	AppendMove<city_type> move{city, (n_ > 0 ? tour_[n_ - 1] : city_type{}), n_};
-	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
+	ctx_.init(move, *dist_, {tour_.data(), n_}, {position_.data(), total}, cost_);
 	invoke_prepare(variant(), move, ctx_);
 
 	if (n_ > 0)
