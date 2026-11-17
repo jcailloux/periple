@@ -228,7 +228,7 @@ Three built-in bounds, all computed on raw distances: a variant with negative pe
 | `SpanningArborescenceBound` | any | up to its member `iterations` (default 30) minimum arborescences over the remaining cities, O(n^2) each |
 | `AssignmentBound` | any | at most two shortest augmenting paths, O(n^2) each; O(n^3) once, at the root |
 
-`branch_and_bound()` uses `SpanningTreeBound` on distances declared symmetric ([Symmetry](DISTANCE_SOURCES.md#symmetry)) and `SpanningArborescenceBound` otherwise, inside `time_windows::DeadlineBound` under strict time windows (below). [Choosing an exact solver](README.md#choosing-an-exact-solver) gives what each one reaches, and when to pass `AssignmentBound`. Each bound has its own header, named after it, in `periple/algorithms/branch_and_bound/`; `branch_and_bound.hpp` includes those of `branch_and_bound()`.
+`branch_and_bound()` uses `SpanningTreeBound` on distances declared symmetric ([Symmetry](DISTANCE_SOURCES.md#symmetry)) and `SpanningArborescenceBound` otherwise, inside `time_windows::DeadlineBound` under strict time windows (below). [CHOOSING_A_SOLVER.md](CHOOSING_A_SOLVER.md) gives what each one reaches, and when to pass `AssignmentBound`. Each bound has its own header, named after it, in `periple/algorithms/branch_and_bound/`; `branch_and_bound.hpp` includes those of `branch_and_bound()`.
 
 `time_windows::DeadlineBound(bound)` (`deadline_bound.hpp`) wraps a bound under `Strict` time windows. It returns `dead_end` for a node from which an unvisited city, or the return to the first, can no longer be reached before the last of its windows closes, even by the shortest path, and the value of `bound` otherwise. It costs O(n^3) once, at the root, for the shortest paths, n^2 doubles, then O(n) per node. It reads the windows of the solver's `Strict`, alone or in a `Composed`; a variant with no `Strict`, or two, does not compile with it.
 
@@ -354,13 +354,15 @@ bool improve_once(Solver& solver) {
 solver.held_karp(periple::AllSets{});
 ```
 
+Under a single `Strict`, alone or composed only with `ServiceTimes` and `Relaxed`, every engine also drops each partial tour that can no longer meet a deadline, by the test of `time_windows::DeadlineBound` ([branch_and_bound](#branch_and_bound)). Its shortest paths take O(n^3) time and n^2 doubles per call; each partial tour the engine would keep then costs O(1), or O(n) when a first check does not settle it. With a variant of your own in the composition, `held_karp` leaves the test out.
+
 | End of the run | Status |
 |---|---|
 | tour found | `optimal` |
 | no tour | `infeasible`, empty tour |
 | `time_limit` reached | `partial`, city 0 alone |
 
-`AllSets` and `ReachableSets` passed where `held_karp()` takes `ReachableLabels` keep the cheapest partial tour, and check the others they drop. Once they drop one that no other dominates, a tour found is `feasible` instead of `optimal`, and without a tour the solver holds city 0 alone, `partial`, instead of `infeasible`. Under `Strict` windows that never make the vehicle wait, the cheapest dominates the others, so both stay `optimal`. On random instances of 16 to 23 cities, `AllSets` took 0.6 to 1.2 times the time of `ReachableLabels` there, and up to 6 times under deadlines tight enough to leave few orders feasible.
+`AllSets` and `ReachableSets` passed where `held_karp()` takes `ReachableLabels` keep the cheapest partial tour, and check the others they drop. Once they drop one that no other dominates, a tour found is `feasible` instead of `optimal`, and without a tour the solver holds city 0 alone, `partial`, instead of `infeasible`. One that fails the deadline test completes no tour: dropping it loses nothing. Under `Strict` windows that never make the vehicle wait, the cheapest dominates the others, so both stay `optimal`. On random instances of 16 to 23 cities under such windows, `AllSets` took 0.7 to 1 times the time of `ReachableLabels` where no deadline binds, and up to 4,700 times under deadlines tight enough to leave few orders feasible.
 
 ### Filter strength
 
