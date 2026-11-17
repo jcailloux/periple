@@ -78,7 +78,24 @@ target_link_libraries(your_target PRIVATE periple::periple)
 </details>
 
 <details>
-<summary><b>Option 3: Copy headers</b></summary>
+<summary><b>Option 3: Installed package</b></summary>
+
+```bash
+cmake -B build
+cmake --install build    # --prefix DIR to install elsewhere
+```
+
+```cmake
+find_package(periple 0.2 REQUIRED)
+target_link_libraries(your_target PRIVATE periple::periple)
+```
+
+A requested version accepts the same minor version only, `0.2.z` here: a 0.x minor release can break the API. With `--prefix`, add the directory to `CMAKE_PREFIX_PATH`.
+
+</details>
+
+<details>
+<summary><b>Option 4: Copy headers</b></summary>
 
 Copy the `include/periple/` directory into your project and add it to your include path.
 
