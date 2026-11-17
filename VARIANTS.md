@@ -47,7 +47,7 @@ Each city has one or more time windows `{earliest, latest}`. A vehicle arriving 
 
 ```cpp
 periple::time_windows::TimeWindow windows[] = {
-    {0, 100},   // city 0: depot, no constraint
+    {0, 100},   // city 0: depot, the tour returns by time 100
     {0,  50},   // city 1: must arrive by time 50
     {10, 80},   // city 2: service between 10 and 80
 };
@@ -57,9 +57,9 @@ For cities with multiple windows (e.g., a shop closed at noon):
 
 ```cpp
 std::vector<std::vector<periple::time_windows::TimeWindow>> windows = {
-    {{0, 100}},            // city 0: always open
+    {{0, 100}},            // city 0: the tour returns by time 100
     {{8, 12}, {14, 18}},   // city 1: closed 12-14
-    {{0, 100}},            // city 2: always open
+    {{0, 100}},            // city 2: open until time 100
 };
 ```
 
@@ -132,12 +132,12 @@ periple::time_windows::TimeWindow windows[] = {{0, 100}, {0, 100}, {0, 12}};
 
 periple::service_times::ServiceTimes svc(durations);
 periple::time_windows::Strict tw(windows);
-auto variant = periple::Composed(svc, tw);   // ServiceTimes first, then Strict
+auto variant = periple::Composed(svc, tw);
 periple::Solver solver(matrix, variant);
 solver.nearest_neighbor();
 ```
 
-**Order matters for `move_prepare`**: ServiceTimes adjusts the departure time, then Strict reads the adjusted arrival/departure to check feasibility. Place adjusters before verifiers.
+**Order**: `ServiceTimes` and `Strict` compose in either order. Both add to the departure, and `Strict` reads the arrival, which neither writes ([Composition](CALLBACKS.md#composition)).
 
 **Dimension deduplication**: both `ServiceTimes` and `Strict` declare `dimension = RouteTiming`. `Composed` merges and deduplicates automatically -- the context contains a single `RouteTiming` instance shared by all variants.
 
@@ -248,7 +248,6 @@ Additionally, a dimension should provide (detected by overload resolution, not t
 - `init(Move, Dist)` or `init(Move, Dist, Ctx)` -- initialize tentative state from the committed state of the previous position, found at `m.pos - 1` for an `AppendMove`. The 3-param form also receives the context: the dimensions initialized before this one and, during construction, `ctx.tour()` and `ctx.position()`.
 - `commit(Move)` -- write tentative state to committed storage, one slot per position: `branch_and_bound` backtracks by letting the next append overwrite the freed slot.
 - `begin_staging(from)`, `discard_staging()`, `save_staging(to)`, `commit_staging(to)` -- required if the dimension commits state on `AppendMove`: a replay (`two_opt`) evaluates candidates without overwriting the committed tour. Store committed values in a `periple::StagedVector` and forward these calls to it, as `RouteTiming` does.
-- `snapshot(Move) -> SnapshotType` and `restore(SnapshotType)` -- save and restore tentative state for constructive algorithms (evaluate/snapshot/restore pattern).
 - `resize_dp(states)`, `begin_dp(state)` and `compare_dp(state)` -- required if the dimension commits state on `DPMove`. `held_karp` stores DP states at indices it assigns: `init` reads the state stored at `m.from_state`, `commit` writes it at `m.to_state`.
   - `resize_dp` makes room for `states` indices as the DP grows, keeping the states stored.
   - `begin_dp` stores at `state` the tentative state that placing the first city leaves, after `init` and `move_prepare` of its `AppendMove`.
@@ -259,6 +258,7 @@ Each method is overloaded per move type (`AppendMove`, `DPMove`), and an algorit
 ### Example: custom dimension
 
 ```cpp
+#include <periple/periple.hpp>
 #include <periple/core/staged_vector.hpp>
 
 struct RouteLoad {
@@ -288,13 +288,6 @@ struct RouteLoad {
     void commit(const periple::AppendMove<CityT>&) {
         loads[pos_] = load;
     }
-
-    struct AppendSnapshot { double load; std::size_t pos; };
-    template <typename CityT>
-    auto snapshot(const periple::AppendMove<CityT>&) const -> AppendSnapshot {
-        return {load, pos_};
-    }
-    void restore(const AppendSnapshot& s) { load = s.load; pos_ = s.pos; }
 };
 ```
 
@@ -308,7 +301,8 @@ struct CapacityConstraint {
 
     template <typename CityT, typename Ctx>
     void move_prepare(const periple::AppendMove<CityT>& m, Ctx& ctx) const {
-        ctx.template dim<RouteLoad>().load += demand[static_cast<std::size_t>(m.city)];
+        if (m.pos < demand.size())  // the closing edge brings no new load
+            ctx.template dim<RouteLoad>().load += demand[static_cast<std::size_t>(m.city)];
     }
 
     template <typename CityT, typename Ctx>

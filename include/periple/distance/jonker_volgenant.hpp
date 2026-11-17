@@ -15,8 +15,8 @@ namespace periple {
 
 // ---------------------------------------------------------------------------
 // JonkerVolgenantView -- zero-copy adapter that presents an n-city asymmetric
-// distance source as a 2n-city symmetric one, enabling symmetric-only
-// algorithms (e.g. Lin-Kernighan, 2-opt) to solve ATSP instances.
+// distance source as a 2n-city symmetric one, so that algorithms written for
+// symmetric distances solve ATSP instances.
 //
 // The cost_type must support negative values (signed integers or floats).
 // Requires n >= 2.

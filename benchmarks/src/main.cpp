@@ -40,7 +40,7 @@ int main(int argc, char* argv[]) {
 		} else if (std::strcmp(argv[i], "--help") == 0) {
 			std::printf(
 				"Usage: periple_bench [options]\n"
-				"  --tier N          Run only tier N (e.g. --tier 1,2)\n"
+				"  --tier N[,M]      Run only tier N, or tiers N to M (e.g. --tier 1,3)\n"
 				"  --algo TAGS       Run only listed algorithms (e.g. --algo NN,HK)\n"
 				"  --runs N          Number of runs for metaheuristics (default: 10)\n"
 				"  --time-limit MS   Stop each run after MS milliseconds (setup excluded)\n"

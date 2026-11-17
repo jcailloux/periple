@@ -8,7 +8,8 @@ All algorithms in periple are benchmarked on [TSPLIB95](http://comopt.ifi.uni-he
 cmake -B .build/release -DCMAKE_BUILD_TYPE=Release -DPERIPLE_BUILD_BENCHMARKS=ON -G Ninja
 cmake --build .build/release
 .build/release/benchmarks/periple_bench                  # all algorithms, all tiers
-.build/release/benchmarks/periple_bench --tier 1,2       # tiers 1-2 only
+.build/release/benchmarks/periple_bench --tier 2         # tier 2 only
+.build/release/benchmarks/periple_bench --tier 1,3       # tiers 1 to 3
 .build/release/benchmarks/periple_bench --algo NN        # single algorithm
 .build/release/benchmarks/periple_bench --algo NN,HK     # multiple algorithms
 .build/release/benchmarks/periple_bench --help            # list available options and algorithm tags
@@ -28,7 +29,7 @@ The limit leaves out the construction an improvement algorithm starts from, whic
 | 2    | N <= 200  | att48, berlin52, st70, eil76, kroA100, kroB100, ch130, ch150, kroA200 | Core heuristic quality |
 | 3    | N <= 1000 | a280, lin318, pcb442, att532, rat575, rat783 | Speed discrimination |
 | 4    | N > 1000  | pr1002, u1817, pr2392, pcb3038, fnl4461, rl5934 | Scalability |
-| 5    | N > 10000 | usa13509, d18512, pla33810, pla85900 | Stress (manual only) |
+| 5    | N > 10000 | usa13509, d18512, pla33810, pla85900 | Stress |
 
 Tier 1 includes three `EXPLICIT` matrix instances (gr17, gr21, gr24) to exercise all supported TSPLIB formats. Known optima are stored in `benchmarks/optima.json`.
 
@@ -68,9 +69,9 @@ The runner produces:
 
 ```
 nearest_neighbor
-Instance       N    Optimum     Cost   Gap(%)  Time(ms)  Valid  Status
-berlin52      52       7542     8965    18.87      0.02  yes    feasible
-kroA100      100      21282    24310    14.22      0.04  yes    feasible
+Instance           N    Optimum       Cost   Gap(%)   Time(ms) Valid Status
+berlin52          52       7542       8980    19.07       0.00   yes feasible
+kroA100          100      21282      27807    30.66       0.01   yes feasible
 ```
 
 ## Adding an algorithm to the benchmark

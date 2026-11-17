@@ -28,7 +28,7 @@ AI assistants are welcome. Say in the pull request which one you used and for wh
 
 `Solver<Dist, Variant>` is the central type. `Dist` is the distance source, `Variant` is the variant (defaults to `NoCallbacks`). CTAD allows `Solver solver(matrix)` or `Solver solver(matrix, variant)`.
 
-The Solver stores a pointer to the variant (`const Variant*`). The variant must outlive the Solver.
+The Solver stores pointers to the distance source (`const Dist*`) and to the variant (`const Variant*`). Both must outlive the Solver.
 
 ### Evaluation pipeline
 
@@ -53,20 +53,14 @@ Key Solver methods:
 
 ### EvalContext
 
-The Solver owns a `context_type` deduced from the variant's `dimension` typedef:
-
-| Variant | Context |
-|---|---|
-| No `dimension` typedef | `EmptyContext<CityT, CostT>` |
-| `using dimension = T` | `EvalContext<CityT, CostT, T>` |
-| `using dimension = Dimensions<Ts...>` | `EvalContext<CityT, CostT, Ts...>` |
+The Solver owns a `context_type` deduced from the variant ([context_for deduction](CALLBACKS.md#context_for-deduction)).
 
 `EvalContext` provides:
 - `cost_delta` (double, mutable) -- additive cost adjustment
 - `dim<D>()` -- access dimension D
 - `tour()`, `position()` -- the placed prefix and its inverse index, during construction (asserted)
 - `cost()` -- the cost so far
-- `init()`, `commit()`, `snapshot()`, `restore()` -- lifecycle methods
+- `init()`, `commit()` -- lifecycle methods
 - `begin_staging()`, `discard_staging()`, `save_staging()`, `commit_staging()` -- replay staging, forwarded to the dimensions that provide it
 - `resize_dp()`, `begin_dp()`, `compare_dp()` -- DP state storage and dominance, forwarded to the dimensions that keep DP state
 
@@ -136,7 +130,7 @@ Every algorithm honors every TSP variant:
 - **Variant callbacks.** Every move the algorithm evaluates or applies goes through the variant pipeline: `ctx_.init`, `invoke_prepare`, `invoke_filter`, then `ctx_.commit` for an applied move. The primitives `evaluate_append` / `append`, `evaluate_replay` / `accept_replay` and `evaluate_reversal` / `accept_reversal` do this for you. With a variant set, every decision and every cost comes from the pipeline. Callbacks read `ctx.tour()` and `ctx.position()` during construction only.
 - **Move types.** Prefer an existing move type, see [Step 2](#step-2-define-move-types-only-if-needed). `Solver` checks `AppendMove` coverage itself, and `evaluate_replay` checks staging. For each other move type the algorithm emits, add the `static_assert`s that the variant and its dimensions handle it, as `held_karp` does for `DPMove`.
 - **Strategy callbacks.** If a framework exists for the algorithm's family, the algorithm is a strategy of it: `nearest_neighbor()` is `greedy_construct(NearestSelector{})`. A framework is introduced when a second algorithm shares the same skeleton. An exact algorithm takes a strategy only where the choice leaves the result exact, as the lower bound and the order of the children of `branch_and_bound`, with a facade for the built-in choice.
-- **Justified exceptions.** A method that genuinely cannot honor a variant, because it is impossible or unreasonably costly, rejects it with a `static_assert` giving the reason, as `rotate_to_front` and `path_cost` do. State the reason in its declaration comment, list the case in the "Applicability" table of [CALLBACKS.md](CALLBACKS.md), and add a [compile-fail test](#compile-fail-tests). Each variant is thus either honored or rejected at compile time.
+- **Justified exceptions.** A method that genuinely cannot honor a variant, because it is impossible or unreasonably costly, rejects it with a `static_assert` giving the reason, as `rotate_to_front` and `path_cost` do. State the reason in its declaration comment, list the case under "Applicability" in [CALLBACKS.md](CALLBACKS.md#applicability), and add a [compile-fail test](#compile-fail-tests). Each variant is thus either honored or rejected at compile time.
 
 ### Time limit support
 
@@ -248,7 +242,7 @@ struct AlgoNNOrOpt : Algorithm<AlgoNNOrOpt> {
     }
 };
 
-using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoNNTwoOpt, AlgoNNOrOpt>;
+using AllAlgorithms = std::tuple<AlgoNearestNeighbor, AlgoHeldKarp, AlgoNNTwoOpt, AlgoBranchAndBound, AlgoNNOrOpt>;
 ```
 
 `run` is the algorithm under test and forwards `RunOptions`. `setup` builds the tour an improvement algorithm starts from, since the registry runs each entry on a fresh solver. Guard `run`: under a hard constraint the construction can stop early, leaving nothing to improve.
@@ -274,7 +268,7 @@ A PR adding an algorithm is complete when:
 - `tests/test_callbacks.cpp` has a protocol test using `LoggingCallbacks`: exact counts and order of `move_prepare` / `move_filter` on a small instance, for each move type the algorithm emits (see `protocol_held_karp_logging`);
 - [algorithm-specific tests](#algorithm-specific-tests) cover any behavior beyond the common contract;
 - removing the algorithm's `invoke_filter` calls, then its `invoke_prepare` calls, then its `ctx_.commit` calls makes at least one test fail each time; an algorithm built on the pipeline primitives (`evaluate_append`, `append`, `evaluate_replay`) passes the same check on its use of them, for example by scoring on raw distances or by ignoring the status `append` leaves. Check it once by hand and revert: it proves the tests see the variant;
-- `README.md` ("Available algorithms"), `CALLBACKS.md` ("Applicability") and `CHANGELOG.md` (`## Unreleased`, public interface changes under `### Breaking`) are updated, and a new test file is added to the tree in [Writing tests](#writing-tests) and to `CLAUDE.md`;
+- `README.md` ("Available algorithms"), `CALLBACKS.md` ("Applicability") and `CHANGELOG.md` (`## Unreleased`, public interface changes under `### Breaking`) are updated, and a new test file is added to the tree in [Writing tests](#writing-tests);
 - the PR description includes the [benchmark results](#benchmark-requirements).
 
 <details>

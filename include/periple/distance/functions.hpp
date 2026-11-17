@@ -15,6 +15,7 @@ namespace periple {
 // CostT controls the return type:
 //   - floating-point (double, float): exact distance, no rounding
 //   - integral (int, long, ...):      rounded to nearest integer
+// except ceiling_euclidean, which rounds up for both.
 //
 // Usage:
 //   CoordinateDistance cd(3, coords, periple::euclidean<double>(3));
