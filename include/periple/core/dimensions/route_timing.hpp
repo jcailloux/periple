@@ -25,7 +25,8 @@ namespace detail {
 
 // A variant that changes RouteTiming only by adding nonnegative amounts to its
 // departure. When every component of a variant does, a departure is at least
-// the arrival plus the amount of any one component, which DeadlineBound needs.
+// the arrival plus the amount of any one component, which the deadline test of
+// DeadlineBound and held_karp needs.
 // The shipped variants that qualify specialize it.
 template <typename V>
 struct only_delays : std::false_type {};
