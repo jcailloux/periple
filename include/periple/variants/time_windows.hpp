@@ -4,11 +4,14 @@
 //
 // Savelsbergh (1985), "Local Search in Routing Problems with Time Windows"
 
+#include <periple/core/composed.hpp>
 #include <periple/core/dimensions/route_timing.hpp>
 #include <periple/core/moves/dp_move.hpp>
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
+#include <cstddef>
 #include <limits>
 #include <optional>
 #include <span>
@@ -233,3 +236,48 @@ template <> struct only_delays<time_windows::Strict> : std::true_type {};
 template <> struct only_delays<time_windows::Relaxed> : std::true_type {};
 
 } // namespace periple::detail
+
+namespace periple::time_windows::detail {
+
+// How many Strict a variant holds, and whether nothing in it makes a time
+// earlier (periple::detail::only_delays), through compositions.
+template <typename V>
+struct timing {
+	static constexpr std::size_t stricts = std::is_same_v<V, Strict> ? 1 : 0;
+	static constexpr bool delays_only = periple::detail::only_delays<V>::value;
+};
+
+template <typename... Vs>
+struct timing<Composed<Vs...>> {
+	static constexpr std::size_t stricts = (timing<Vs>::stricts + ... + 0);
+	static constexpr bool delays_only = (timing<Vs>::delays_only && ...);
+};
+
+// The variants under which the deadline test of DeadlineBound is exact, and
+// branch_and_bound() applies it.
+template <typename Variant>
+inline constexpr bool deadline_test_exact = timing<Variant>::stricts == 1 && timing<Variant>::delays_only;
+
+// The Strict of a variant that holds exactly one.
+inline const Strict& strict_of(const Strict& windows) { return windows; }
+
+template <typename... Vs>
+const Strict& strict_of(const Composed<Vs...>& composed) {
+	static constexpr bool holds[] = {(timing<Vs>::stricts > 0)...};
+	constexpr auto i = static_cast<std::size_t>(std::find(holds, holds + sizeof...(Vs), true) - holds);
+	return strict_of(composed.template component<i>());
+}
+
+// Per city, the end of its last window plus a margin, +infinity without one.
+// The deadline test adds times in another order than RouteTiming, so it rounds
+// differently: the margin keeps a tour that arrives just on time.
+inline void due_times(const Strict& windows, std::span<double> out) {
+	for (std::size_t c = 0; c < out.size(); ++c) {
+		const auto ws = windows.windows(c);
+		double latest = ws.empty() ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
+		for (const auto& w : ws) latest = std::max(latest, w.latest);
+		out[c] = latest + 1e-9 * (1.0 + std::abs(latest));
+	}
+}
+
+} // namespace periple::time_windows::detail
