@@ -456,11 +456,6 @@ struct RouteLoad {
 
 	template <typename CityT>
 	void commit(const AppendMove<CityT>&) { loads[pos_] = load; }
-
-	struct AppendSnapshot { double load; std::size_t pos; };
-	template <typename CityT>
-	auto snapshot(const AppendMove<CityT>&) const -> AppendSnapshot { return {load, pos_}; }
-	void restore(const AppendSnapshot& s) { load = s.load; pos_ = s.pos; }
 };
 
 // Loads pick up and drop off: the load must stay within [0, capacity].
