@@ -99,6 +99,10 @@ periple_compile_fail(dp_dimension_without_order
     "dimension stores DPMove state without compare_dp")
 periple_compile_fail(held_karp_unknown_engine
     "held_karp: the engine is periple::AllSets, periple::ReachableSets or periple::ReachableLabels")
+periple_compile_fail(rotate_to_front_variant
+    "rotate_to_front: only without a variant")
+periple_compile_fail(path_cost_variant
+    "path_cost: raw distances only")
 
 # Each public header compiles on its own, so a header includes what it uses.
 file(GLOB_RECURSE periple_headers CONFIGURE_DEPENDS

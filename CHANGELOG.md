@@ -19,9 +19,9 @@
 
 ### Changed
 
-- `held_karp()` without a variant: about a fifth of the memory with `int` costs from 19 cities, and up to a fifth less time on a fresh solver.
-- `held_karp()` under a variant that filters `DPMove` creates only the visited sets that accepted moves reach: 10 to 170 times less time when the filter prunes most sets, up to 1.6 times more when it prunes little ([Filter strength](CALLBACKS.md#filter-strength)). `held_karp(periple::AllSets{})` keeps the table.
-- `held_karp()` under `Strict` takes `ReachableLabels`, and each engine drops the partial tours that can no longer meet a deadline, as `branch_and_bound()` does. Under windows that never make the vehicle wait, where `held_karp` was already exact, it takes at most 60% of the former memory, and from about a ten-thousandth of the former time where deadlines prune most orders to 1.5 times where they prune none. `held_karp(periple::AllSets{})` stays `optimal` there, within 15% of the former time where no deadline binds, and up to 19 times faster under deadlines.
+- `held_karp()` without a variant: about a fifth of the memory with `int` costs from 19 cities, and up to 15% less time on a fresh solver.
+- `held_karp()` under a variant that filters `DPMove` creates only the visited sets that accepted moves reach: 8 to 300 times less time when the filter prunes most sets, up to 1.6 times more when it prunes little ([Filter strength](CALLBACKS.md#filter-strength)). `held_karp(periple::AllSets{})` keeps the table.
+- `held_karp()` under `Strict` takes `ReachableLabels`, and each engine drops the partial tours that can no longer meet a deadline, as `branch_and_bound()` does. Under windows that never make the vehicle wait, where `held_karp` was already exact, it takes at most 60% of the former memory, and from about a twenty-thousandth of the former time where deadlines prune most orders to 1.7 times where they prune none. `held_karp(periple::AllSets{})` stays `optimal` there, within 15% of the former time where no deadline binds, and up to 19 times faster under deadlines.
 
 ### Breaking
 
@@ -30,6 +30,7 @@
 - `ctx.tour()` and `ctx.position()` fail an assert during a replay and during `held_karp`, where they used to return an empty span and an unrelated tour.
 - A dimension that commits state on `AppendMove` must provide staging (`begin_staging`, `discard_staging`, `save_staging`, `commit_staging`) to be used with `two_opt` or any replay, so that a rejected candidate leaves the committed tour's state intact.
 - `load_tsplib` returns a `DistanceMatrix<int>`, declared symmetric unless the file's `TYPE` is `ATSP`, instead of a `SymmetricDistanceMatrix<int>`: about twice the memory. Code that names the type changes; `auto` does not.
+- `load_tsplib_coords` returns a `CoordinateDistance` over `detail::TsplibMetric`, which declares its symmetry, instead of one over a function pointer. Code that names the type changes; `auto` does not.
 - `two_opt` takes its symmetric mode on every source declared symmetric, where it needed `set_symmetric(true)`: the tour found can differ, its first city too (`rotate_to_front` puts it back). `set_symmetric(false)` keeps the directed search.
 - `set_matrix` replaces a `set_symmetric` override with the new source's declaration, where it kept the override. `set_symmetric` requires a source, asserted in debug builds: call it after `set_matrix`.
 - `set_variant` clears the solution, as `set_matrix` does, where it kept the tour with the cost and status computed under the former variant. To start from the tour, copy it and pass it to `set_tour` after `set_variant`.
@@ -42,6 +43,7 @@
 - The custom dimension example in VARIANTS.md read its position from `ctx.tour()`, which is empty during a replay, did not stage its state, and called an undefined `demand()`.
 - `jonker_volgenant()`: forbidden edges cost `big_m` instead of the largest value of the cost type, which overflowed integer costs under `branch_and_bound` and directed `two_opt`.
 - The README documented a tour cost function and variant arguments on algorithm methods that do not exist. A variant is set on the solver: `Solver(dist, variant)` or `set_variant`.
+- Examples that failed as written: the README's TSPLIB loading, selective includes and standalone examples missed an include, and its solving example ran `held_karp()`, limited to 25 cities, on 52; the custom source of DISTANCE_SOURCES.md was a temporary, which the solver kept a pointer to.
 - `load_tsplib` reads a `FULL_MATRIX` whole: it kept the lower triangle, so an ATSP instance loaded wrong, without error. Under another `TYPE`, asymmetric `FULL_MATRIX` data throw `std::runtime_error` instead of losing their upper triangle.
 - `held_karp` under `Relaxed`, and under `Strict` windows that make the vehicle wait, kept only the cheapest partial tour per visited set and last city: it could return a costlier tour as `optimal`, or `infeasible` for a feasible instance. `held_karp()` takes `ReachableLabels` there.
 - `held_karp` started from the first city at time 0, without its service time or the wait for its window, which `append()` and every other algorithm apply: it could return as `optimal` a costlier tour or one that misses a window.
