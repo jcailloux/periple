@@ -28,6 +28,15 @@ namespace detail {
 template <typename V>
 struct cheapest_state_suffices : std::false_type {};
 
+// A variant under which every tour must reach each city by a due time, and
+// nothing makes a time earlier: held_karp() then drops a state from which an
+// unvisited city, or the return to city 0, can no longer be reached in time.
+// The specialization gives due_times(v, out), one per city, and departure(ctx),
+// the departure from the city just entered. Time windows specialize it under a
+// single Strict.
+template <typename V>
+struct dp_deadlines : std::false_type {};
+
 } // namespace detail
 
 } // namespace periple

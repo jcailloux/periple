@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <limits>
@@ -94,6 +96,38 @@ struct Unreachable1 {
 	bool move_filter(const DPMove<CityT>& m) const { return m.to != 1; }
 };
 
+// A variant of the user's that makes times earlier: leaving city c takes cut[c]
+// off the departure, as a faster road would.
+struct Shortcut {
+	using dimension = RouteTiming;
+	std::vector<double> cut;
+
+	template <typename CityT, typename Ctx>
+	void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const {
+		ctx.template dim<RouteTiming>().departure -= cut[static_cast<std::size_t>(m.city)];
+	}
+
+	template <typename CityT, typename Ctx>
+	void move_prepare(const DPMove<CityT>& m, Ctx& ctx) const {
+		ctx.template dim<RouteTiming>().departure -= cut[static_cast<std::size_t>(m.to)];
+	}
+};
+
+// A matrix that spins on every read, as a slow distance source would.
+struct SlowDistance {
+	using cost_type = int;
+	using city_type = std::size_t;
+	const DistanceMatrix<int>* dist;
+	std::chrono::microseconds spin;
+
+	int operator()(std::size_t a, std::size_t b) const {
+		const auto end = std::chrono::steady_clock::now() + spin;
+		while (std::chrono::steady_clock::now() < end) {}
+		return (*dist)(a, b);
+	}
+	std::size_t size() const { return dist->size(); }
+};
+
 // ---------------------------------------------------------------------------
 // Default engine, per variant
 // ---------------------------------------------------------------------------
@@ -114,6 +148,23 @@ static_assert(std::is_same_v<engine_of<Composed<service_times::ServiceTimes, tim
 static_assert(std::is_same_v<engine_of<StrongPrecedence>, ReachableSets>, "held_karp(): a variant of one's own that filters DPMove gets ReachableSets");
 static_assert(std::is_same_v<engine_of<Composed<service_times::ServiceTimes, StrongPrecedence>>, ReachableSets>,
 	"held_karp(): ServiceTimes and a filter of one's own, so ReachableSets");
+
+// ---------------------------------------------------------------------------
+// Deadline test, per variant
+// ---------------------------------------------------------------------------
+
+static_assert(detail::dp_deadlines<time_windows::Strict>::value
+	&& detail::dp_deadlines<Composed<service_times::ServiceTimes, time_windows::Strict>>::value
+	&& detail::dp_deadlines<Composed<time_windows::Strict, time_windows::Relaxed>>::value
+	&& detail::dp_deadlines<Composed<Composed<service_times::ServiceTimes, time_windows::Strict>, time_windows::Relaxed>>::value,
+	"held_karp drops the states that miss a due time under one Strict, alone or composed with shipped variants");
+static_assert(!detail::dp_deadlines<NoCallbacks>::value && !detail::dp_deadlines<service_times::ServiceTimes>::value
+	&& !detail::dp_deadlines<time_windows::Relaxed>::value,
+	"without a Strict, nothing is due");
+static_assert(!detail::dp_deadlines<Composed<time_windows::Strict, time_windows::Strict>>::value,
+	"the test reads one Strict: under two, held_karp keeps every state the filters admit");
+static_assert(!detail::dp_deadlines<Composed<Shortcut, time_windows::Strict>>::value,
+	"a variant of the user's could make a time earlier: held_karp keeps every state the filters admit");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -376,6 +427,138 @@ void test_reuse() {
 	run(large, ReachableLabels{});
 }
 
+// Every arc takes 1 and city 1 closes at 1: leaving city 0 for another city, a
+// state reaches city 1 at 2 at the earliest. Only {0} and the sets that hold
+// city 1 remain, 1 + 2^(n-2) of the 2^(n-1). Then every arc takes 10, city 1
+// opens at 100 and city 0 closes at 105: leaving city 1 at 100, a tour returns
+// at 110 at the earliest. Only the sets without city 1 remain, 2^(n-2), and no
+// tour: a dropped state is no loss, so even one state per (set, city) proves
+// there is none.
+void test_deadline_pruning() {
+	constexpr std::size_t n = 6;
+	constexpr double open = 1e9;
+	auto uniform = [](int weight) {
+		std::vector<int> w(n * n, weight);
+		for (std::size_t i = 0; i < n; ++i) w[i * n + i] = 0;
+		return DistanceMatrix<int>(n, w);
+	};
+
+	const auto ones = uniform(1);
+	std::vector<time_windows::TimeWindow> closing(n, {0, open});
+	closing[1] = {0, 1};
+	const time_windows::Strict first(closing);
+	Solver sets(ones, first);
+	Solver labels(ones, first);
+	run_checked(sets, [&] { sets.held_karp(ReachableSets{}); });
+	run_checked(labels, [&] { labels.held_karp(ReachableLabels{}); });
+	assert(sets.status() == SolutionStatus::optimal && labels.status() == SolutionStatus::optimal
+		&& sets.cost() == static_cast<int>(n) && labels.cost() == static_cast<int>(n)
+		&& "city 1 first, every tour costs n");
+	assert(SolverTestAccess(sets).hk_slots() == 1 + (std::size_t{1} << (n - 2))
+		&& "ReachableSets keeps {0} and the sets that hold city 1 alone");
+	assert(SolverTestAccess(labels).hk_label_slots() == 1 + (std::size_t{1} << (n - 2))
+		&& "ReachableLabels keeps {0} and the sets that hold city 1 alone");
+
+	const auto tens = uniform(10);
+	std::vector<time_windows::TimeWindow> returning(n, {0, open});
+	returning[0] = {0, 105};
+	returning[1] = {100, 200};
+	const time_windows::Strict back(returning);
+	Solver all(tens, back);
+	Solver sets_back(tens, back);
+	Solver labels_back(tens, back);
+	run_checked(all, [&] { all.held_karp(AllSets{}); });
+	run_checked(sets_back, [&] { sets_back.held_karp(ReachableSets{}); });
+	run_checked(labels_back, [&] { labels_back.held_karp(ReachableLabels{}); });
+	for (const auto* s : {&all, &sets_back, &labels_back})
+		assert(s->status() == SolutionStatus::infeasible && s->tour().empty()
+			&& "no tour returns in time, and a dropped state is no loss");
+	assert(SolverTestAccess(sets_back).hk_slots() == std::size_t{1} << (n - 2)
+		&& "ReachableSets keeps the sets without city 1 alone");
+	assert(SolverTestAccess(labels_back).hk_label_slots() == std::size_t{1} << (n - 2)
+		&& "ReachableLabels keeps the sets without city 1 alone");
+}
+
+// Only the tour 0, 1, 2, 3 reaches city 3 in time, at (0.3 + 0.2) + 0.1 = 0.6;
+// the test takes the shortest path from city 1, 0.2 + 0.1, off 0.6, which
+// rounds below the departure from city 1, 0.3.
+void test_deadline_rounding() {
+	assert((0.3 + 0.2) + 0.1 <= 0.6 && 0.3 > 0.6 - (0.2 + 0.1) && "the case rests on this rounding");
+	DistanceMatrix<double> rounding(4, std::vector<double>(16, 10.0));
+	for (std::size_t i = 0; i < 4; ++i) rounding(i, i) = 0.0;
+	rounding(0, 1) = 0.3;
+	rounding(1, 2) = 0.2;
+	rounding(2, 3) = 0.1;
+	rounding(3, 0) = 1.0;
+	const std::vector<time_windows::TimeWindow> on_time = {{0, 1e9}, {0, 1e9}, {0, 1e9}, {0, 0.6}};
+	const time_windows::Strict margin(on_time);
+	auto check = [&](auto engine) {
+		Solver s(rounding, margin);
+		run_checked(s, [&] { s.held_karp(engine); });
+		assert(s.status() == SolutionStatus::optimal && std::abs(s.cost() - 1.6) < 1e-9
+			&& "the margin keeps a tour that arrives just on time");
+	};
+	check(AllSets{});
+	check(ReachableSets{});
+	check(ReachableLabels{});
+}
+
+// Leaving city 2 at 10, the shortest path reaches city 3 at 30, past 15; the
+// shortcut at city 1 brings the tour 0, 2, 1, 3, the only one, there at 10.
+// Applied, the deadline test would drop the state at city 2 and lose that tour:
+// under a variant of the user's, held_karp does not apply it.
+void test_deadline_test_needs_delays_only() {
+	std::vector<int> w(16, 50);
+	for (std::size_t i = 0; i < 4; ++i) w[i * 4 + i] = 0;
+	DistanceMatrix<int> dist(4, w);
+	dist(0, 2) = 10;
+	dist(2, 1) = 10;
+	dist(1, 3) = 10;
+	dist(3, 0) = 10;
+	const std::vector<time_windows::TimeWindow> windows = {{0, 1e9}, {0, 1e9}, {0, 1e9}, {0, 15}};
+	const time_windows::Strict strict(windows);
+	const Shortcut shortcut{{0, 20, 0, 0}};
+	const Composed variant(shortcut, strict);
+
+	std::optional<int> best;
+	std::vector<std::size_t> tour{0, 1, 2, 3};
+	do {
+		const auto cost = pipeline_cost(dist, tour, variant);
+		if (cost && (!best || *cost < *best)) best = cost;
+	} while (std::next_permutation(tour.begin() + 1, tour.end()));
+	assert(best == 40 && "the shortcut admits the tour 0, 2, 1, 3 alone");
+
+	auto check = [&](auto engine) {
+		Solver s(dist, variant);
+		run_checked(s, [&] { s.held_karp(engine); });
+		assert(s.status() == SolutionStatus::optimal && s.cost() == *best && "held_karp keeps the tour the shortcut admits");
+	};
+	check(AllSets{});
+	check(ReachableSets{});
+	check(ReachableLabels{});
+}
+
+// A limit that expires while the latest departures are built stops the engine
+// there: partial, the start city alone. Ten cities, 50 us per read of the
+// distance: building them takes 5 ms, past the limit.
+void test_deadline_stops_in_precompute() {
+	using namespace std::chrono;
+	test::Rng rng{0x6A09E667F3BCC908ull};
+	const auto dist = random_matrix(rng, 10, 30);
+	const SlowDistance slow{&dist, microseconds{50}};
+	const std::vector<time_windows::TimeWindow> windows(dist.size(), {0.0, 1e9});
+	const time_windows::Strict tw(windows);
+	auto check = [&](auto engine) {
+		Solver s(slow, tw);
+		run_checked(s, [&] { s.held_karp(engine, {.time_limit = milliseconds{1}}); });
+		assert(s.status() == SolutionStatus::partial && s.tour().size() == 1 && s.tour()[0] == 0
+			&& "stopped before any tour, held_karp keeps the start city alone");
+	};
+	check(AllSets{});
+	check(ReachableSets{});
+	check(ReachableLabels{});
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -414,5 +597,25 @@ int main() {
 	std::printf("reuse ... ");
 	std::fflush(stdout);
 	test_reuse();
+	std::printf("OK\n");
+
+	std::printf("deadline_pruning ... ");
+	std::fflush(stdout);
+	test_deadline_pruning();
+	std::printf("OK\n");
+
+	std::printf("deadline_rounding ... ");
+	std::fflush(stdout);
+	test_deadline_rounding();
+	std::printf("OK\n");
+
+	std::printf("deadline_test_needs_delays_only ... ");
+	std::fflush(stdout);
+	test_deadline_test_needs_delays_only();
+	std::printf("OK\n");
+
+	std::printf("deadline_stops_in_precompute ... ");
+	std::fflush(stdout);
+	test_deadline_stops_in_precompute();
 	std::printf("OK\n");
 }
