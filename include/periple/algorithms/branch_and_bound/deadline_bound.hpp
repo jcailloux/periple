@@ -12,51 +12,15 @@
 //      the end of the tour, test 1
 
 #include <periple/algorithms/branch_and_bound/search.hpp>
-#include <periple/core/composed.hpp>
+#include <periple/core/latest_departures.hpp>
 #include <periple/variants/time_windows.hpp>
 
-#include <algorithm>
 #include <cassert>
-#include <cmath>
 #include <cstddef>
-#include <limits>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace periple::time_windows {
-
-namespace detail {
-
-// How many Strict a variant holds, and whether nothing in it makes a time
-// earlier (periple::detail::only_delays), through compositions.
-template <typename V>
-struct timing {
-	static constexpr std::size_t stricts = std::is_same_v<V, Strict> ? 1 : 0;
-	static constexpr bool delays_only = periple::detail::only_delays<V>::value;
-};
-
-template <typename... Vs>
-struct timing<Composed<Vs...>> {
-	static constexpr std::size_t stricts = (timing<Vs>::stricts + ... + 0);
-	static constexpr bool delays_only = (timing<Vs>::delays_only && ...);
-};
-
-// The variants under which branch_and_bound() applies the deadline test.
-template <typename Variant>
-inline constexpr bool deadline_test_exact = timing<Variant>::stricts == 1 && timing<Variant>::delays_only;
-
-// The Strict of a variant that holds exactly one.
-inline const Strict& strict_of(const Strict& windows) { return windows; }
-
-template <typename... Vs>
-const Strict& strict_of(const Composed<Vs...>& composed) {
-	static constexpr bool holds[] = {(timing<Vs>::stricts > 0)...};
-	constexpr auto i = static_cast<std::size_t>(std::find(holds, holds + sizeof...(Vs), true) - holds);
-	return strict_of(composed.template component<i>());
-}
-
-} // namespace detail
 
 // Lower bound for branch_and_bound under Strict windows, around an inner bound:
 // a node from which some unvisited city, or the return to the first, can no
@@ -80,24 +44,21 @@ public:
 
 	template <DistanceSource Dist, typename Variant, typename Stop>
 	void begin(const Solver<Dist, Variant>& solver, Stop& stop) {
+		using city_type = typename dist_traits<Dist>::city_type;
 		static_assert(detail::timing<Variant>::stricts == 1,
 			"DeadlineBound: the solver's variant must hold exactly one time_windows::Strict, whose windows the test reads");
 		windows_ = &detail::strict_of(solver.variant());
 		n_ = solver.size();
+		due_.resize(n_);
+		detail::due_times(*windows_, due_);
+		const auto distance = [&solver](std::size_t a, std::size_t b) {
+			return solver.distance(static_cast<city_type>(a), static_cast<city_type>(b));
+		};
 		// Stopped, the search ends before the first lower_bound.
-		if (!shortest_paths(solver, stop)) return;
+		if (!periple::detail::build_latest_departures(table_, distance, due_, stop)) return;
 		const auto tour = solver.tour();
 		first_ = static_cast<std::size_t>(tour.front());
-		limit_.resize(n_);
-		for (std::size_t c = 0; c < n_; ++c) {
-			const auto ws = windows_->windows(c);
-			double latest = ws.empty() ? std::numeric_limits<double>::infinity() : -std::numeric_limits<double>::infinity();
-			for (const auto& w : ws) latest = std::max(latest, w.latest);
-			// The test adds times in another order than RouteTiming, so it rounds
-			// differently: the margin keeps a tour that arrives just on time.
-			limit_[c] = latest + 1e-9 * (1.0 + std::abs(latest));
-		}
-		open_ = limit_;
+		in_prefix_.assign(n_, 0);
 		placed_.resize(n_);
 		departure_.resize(n_);
 		masked_ = 0;
@@ -105,7 +66,7 @@ public:
 			const auto c = static_cast<std::size_t>(tour[i]);
 			const double arrival = i == 0 ? 0.0 : departure_[i - 1] + static_cast<double>(solver.distance(tour[i - 1], tour[i]));
 			departure_[i] = detail::departure_time(windows_->windows(c), arrival);
-			open_[c] = std::numeric_limits<double>::infinity();
+			in_prefix_[c] = 1;
 			placed_[masked_++] = c;
 		}
 		if constexpr (requires { bound_.begin(solver, stop); }) bound_.begin(solver, stop);
@@ -120,26 +81,6 @@ public:
 	}
 
 private:
-	// Floyd-Warshall on travel times; false if stop fires first.
-	template <DistanceSource Dist, typename Variant, typename Stop>
-	bool shortest_paths(const Solver<Dist, Variant>& solver, Stop& stop) {
-		using city_type = typename dist_traits<Dist>::city_type;
-		paths_.resize(n_ * n_);
-		for (std::size_t a = 0; a < n_; ++a)
-			for (std::size_t b = 0; b < n_; ++b)
-				paths_[a * n_ + b] = static_cast<double>(solver.distance(static_cast<city_type>(a), static_cast<city_type>(b)));
-		for (std::size_t k = 0; k < n_; ++k) {
-			if (stop()) return false;
-			const double* via = paths_.data() + k * n_;
-			for (std::size_t a = 0; a < n_; ++a) {
-				double* from = paths_.data() + a * n_;
-				const double to_k = from[k];
-				for (std::size_t b = 0; b < n_; ++b) from[b] = std::min(from[b], to_k + via[b]);
-			}
-		}
-		return true;
-	}
-
 	// Departs the last city at the earliest, then checks every deadline.
 	template <DistanceSource Dist, typename Variant>
 	bool misses_a_deadline(const Solver<Dist, Variant>& solver) {
@@ -150,33 +91,26 @@ private:
 		const double arrival = departure_[depth - 2] + static_cast<double>(solver.distance(tour[depth - 2], tour[depth - 1]));
 		const double departure = detail::departure_time(windows_->windows(last), arrival);
 		departure_[depth - 1] = departure;
-		// Depth first, the parent's prefix is masked already: cities placed
-		// beyond it since get their limit back, then the last city masks.
-		while (masked_ > depth - 1) {
-			const std::size_t c = placed_[--masked_];
-			open_[c] = limit_[c];
-		}
-		open_[last] = std::numeric_limits<double>::infinity();
+		// Depth first, the parent's prefix is marked already: cities placed
+		// beyond it since leave the prefix, then the last city enters it.
+		while (masked_ > depth - 1) in_prefix_[placed_[--masked_]] = 0;
+		in_prefix_[last] = 1;
 		placed_[masked_++] = last;
-		const double* to = paths_.data() + last * n_;
-		bool late = departure + to[first_] > limit_[first_];
-		// Eight cities without a branch, then the next eight: a late city ends the scan.
-		std::size_t c = 0;
-		for (; c + 8 <= n_ && !late; c += 8)
-			for (std::size_t k = c; k < c + 8; ++k) late |= departure + to[k] > open_[k];
-		for (; c < n_ && !late; ++c) late |= departure + to[c] > open_[c];
-		return late;
+		// No O(1) pre-test: here it rarely concludes, as the least slack of a
+		// row also counts the visited cities.
+		return periple::detail::misses_a_due_time(table_, n_, last, departure, first_,
+			[this](std::size_t c) { return in_prefix_[c] == 0; });
 	}
 
-	const Strict* windows_ = nullptr;  // the Strict of the solver's variant, set by begin
+	const Strict* windows_ = nullptr;          // the Strict of the solver's variant, set by begin
 	Bound bound_;
 	std::size_t n_ = 0, first_ = 0;
-	std::vector<double> paths_;        // paths_[a * n_ + b]: shortest travel time from a to b
-	std::vector<double> limit_;        // by city: the end of its last window, plus the margin
-	std::vector<double> open_;         // limit_, +infinity for the cities of the prefix
-	std::vector<std::size_t> placed_;  // by position: the cities open_ masks
-	std::size_t masked_ = 0;           // how many
-	std::vector<double> departure_;    // by position: the earliest departure, under the windows alone
+	std::vector<double> due_;                  // by city: the end of its last window, plus the margin
+	periple::detail::LatestDepartures table_;  // from due_ and the shortest travel times
+	std::vector<unsigned char> in_prefix_;     // by city: 1 for the cities of the prefix
+	std::vector<std::size_t> placed_;          // by position: the cities in_prefix_ marks
+	std::size_t masked_ = 0;                   // how many
+	std::vector<double> departure_;            // by position: the earliest departure, under the windows alone
 };
 
 } // namespace periple::time_windows
