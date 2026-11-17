@@ -253,8 +253,8 @@ struct timing<Composed<Vs...>> {
 	static constexpr bool delays_only = (timing<Vs>::delays_only && ...);
 };
 
-// The variants under which the deadline test of DeadlineBound is exact, and
-// branch_and_bound() applies it.
+// The variants under which the deadline test is exact: branch_and_bound()
+// applies DeadlineBound, and held_karp drops the states that fail it.
 template <typename Variant>
 inline constexpr bool deadline_test_exact = timing<Variant>::stricts == 1 && timing<Variant>::delays_only;
 
@@ -281,3 +281,18 @@ inline void due_times(const Strict& windows, std::span<double> out) {
 }
 
 } // namespace periple::time_windows::detail
+
+namespace periple::detail {
+
+template <typename V>
+	requires time_windows::detail::deadline_test_exact<V>
+struct dp_deadlines<V> : std::true_type {
+	static void due_times(const V& v, std::span<double> out) {
+		time_windows::detail::due_times(time_windows::detail::strict_of(v), out);
+	}
+	// As the DPMove callbacks leave it, waiting and service included.
+	template <typename Ctx>
+	static double departure(const Ctx& ctx) { return ctx.template dim<RouteTiming>().departure; }
+};
+
+} // namespace periple::detail
