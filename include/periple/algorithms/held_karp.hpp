@@ -123,7 +123,7 @@ auto Solver<Dist, Variant>::held_karp(Engine, HeldKarpParams params) -> Solver& 
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::start_dp(std::size_t root) {
 	AppendMove<city_type> start{city_type{0}, city_type{}, 0};
-	ctx_.init(start, *dist_, {tour_.data(), 0}, {position_.data(), 0}, cost_type{});
+	ctx_.init(start, *dist_, {tour_.data(), 0}, {position_.data(), dist_->size()}, cost_type{});
 	invoke_prepare(variant(), start, ctx_);
 	ctx_.begin_dp(root);
 }
