@@ -192,11 +192,6 @@ struct EmptyContext {
 
 	static constexpr bool replay_safe = true;
 
-	struct Snapshot { double cost_delta; };
-	template <typename Move>
-	auto snapshot(const Move&) const -> Snapshot { return {cost_delta}; }
-	void restore(const Snapshot& s) { cost_delta = s.cost_delta; }
-
 private:
 	std::span<const CityT> tour_;
 	std::span<const CityT> position_;
@@ -363,28 +358,6 @@ struct EvalContext {
 	template <typename Move, typename Dist>
 	static constexpr bool dims_handle = (detail::dimension_handles_move<Dims, Move, Dist, EvalContext> && ...);
 
-	// Snapshot parameterized by move type.
-	// Only instantiated when snapshot() is called (e.g. for AppendMove in
-	// constructive algorithms). DP commits inline and never snapshots.
-	template <typename Move>
-	struct Snapshot {
-		double cost_delta;
-		std::tuple<
-			decltype(std::declval<Dims>().snapshot(std::declval<Move>()))...
-		> dims;
-	};
-
-	template <typename Move>
-	auto snapshot(const Move& m) const -> Snapshot<Move> {
-		return {cost_delta, {std::get<Dims>(dims_).snapshot(m)...}};
-	}
-
-	template <typename Move>
-	void restore(const Snapshot<Move>& s) {
-		cost_delta = s.cost_delta;
-		restore_dims(s.dims, std::index_sequence_for<Dims...>{});
-	}
-
 private:
 	// Dispatch init: 3-param (Move, Dist, Ctx) if available, else 2-param.
 	template <typename D, typename Move, typename Dist>
@@ -404,11 +377,6 @@ private:
 		} else if constexpr (requires { d.commit(m); }) {
 			d.commit(m);
 		}
-	}
-
-	template <typename Tuple, std::size_t... Is>
-	void restore_dims(const Tuple& t, std::index_sequence<Is...>) {
-		(std::get<Is>(dims_).restore(std::get<Is>(t)), ...);
 	}
 
 	std::span<const CityT> tour_;
