@@ -58,7 +58,7 @@ include(FetchContent)
 FetchContent_Declare(
     periple
     GIT_REPOSITORY https://github.com/jcailloux/periple.git
-    GIT_TAG        main
+    GIT_TAG        v0.2.0
 )
 FetchContent_MakeAvailable(periple)
 

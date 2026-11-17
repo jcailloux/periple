@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 project(periple
-    VERSION 0.1.0
+    VERSION 0.2.0
     LANGUAGES CXX
     DESCRIPTION "C++20 header-only TSP solver library"
 )
