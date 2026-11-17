@@ -545,6 +545,25 @@ void test_resume_rejected_prefix() {
 		&& "the rejected prefix is kept");
 }
 
+// A construction whose return to the first city is rejected holds a complete
+// tour, infeasible, costed in full as set_tour costs it.
+void test_rejected_closing_edge() {
+	auto mat = make_mat4();
+	std::vector<time_windows::TimeWindow> windows(4, {0.0, 1000.0});
+	windows[0] = {0.0, 70.0};  // 0 1 3 2 returns to city 0 at 80
+	time_windows::Strict tw(windows);
+	Solver solver(mat, tw);
+	solver.nearest_neighbor();
+	assert(solver.status() == SolutionStatus::infeasible && "nearest_neighbor: the return to city 0 is late");
+	assert(solver.tour().size() == 4 && "the rejected tour is complete");
+	assert(solver.cost() == 80 && "cost() covers the rejected return to city 0");
+
+	std::vector<std::size_t> tour(solver.tour().begin(), solver.tour().end());
+	solver.set_tour(tour);
+	assert(solver.status() == SolutionStatus::infeasible && solver.cost() == 80
+		&& "set_tour judges and costs the same tour alike");
+}
+
 // ---------------------------------------------------------------------------
 // Unit: asymmetric matrix with callbacks
 // ---------------------------------------------------------------------------
@@ -890,6 +909,7 @@ int main() {
 		{"set_tour_full",                test_set_tour_full},
 		{"set_tour_empty",               test_set_tour_empty},
 		{"resume_rejected_prefix",       test_resume_rejected_prefix},
+		{"rejected_closing_edge",        test_rejected_closing_edge},
 		// Unit - asymmetric
 		{"asymmetric_with_callbacks",    test_asymmetric_with_callbacks},
 		// Functional - TSPTW

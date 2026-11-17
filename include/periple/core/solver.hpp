@@ -753,6 +753,8 @@ void Solver<Dist, Variant>::pop_back(cost_type prefix_cost) {
 
 // --- close_tour -------------------------------------------------------------
 
+// Runs the closing edge through the pipeline and adds its cost, admitted or
+// not, as replay_tour does: a rejected tour is complete, infeasible.
 template <DistanceSource Dist, typename Variant>
 void Solver<Dist, Variant>::close_tour() {
 	if (n_ <= 1) {
@@ -762,12 +764,9 @@ void Solver<Dist, Variant>::close_tour() {
 	AppendMove<city_type> closing{tour_[0], tour_[n_ - 1], n_};
 	ctx_.init(closing, *dist_, {tour_.data(), n_}, {position_.data(), n_}, cost_);
 	invoke_prepare(variant(), closing, ctx_);
-	if (!invoke_filter(variant(), closing, ctx_)) {
-		status_ = SolutionStatus::infeasible;
-		return;
-	}
+	const bool admitted = invoke_filter(variant(), closing, ctx_);
 	cost_ += static_cast<cost_type>(edge_delta(tour_[n_ - 1], tour_[0]));
-	status_ = SolutionStatus::feasible;
+	status_ = admitted ? SolutionStatus::feasible : SolutionStatus::infeasible;
 }
 
 // --- Evaluation -------------------------------------------------------------
