@@ -55,6 +55,7 @@
 - `find_package(periple)` could miss an installed periple from a project of another architecture or pointer size (32 or 64 bits) than the build that installed it; a header-only library depends on neither.
 - `JonkerVolgenantView::atsp_tour` returned the reversed ATSP tour, whose cost can differ from `atsp_cost`, from a symmetric tour where each real city follows its ghost, such as the tour of `held_karp()` on the view.
 - `nearest_neighbor`, `greedy_construct` and `append` left the return to the first city out of `cost()` when `move_filter` rejects it. The complete tour, `infeasible`, now costs all of it, as `set_tour` costs it.
+- `position()` and `ctx.position()` held one entry per placed city though indexed by city: on a partial tour, a placed city numbered past their length read past the end. They hold one entry per city.
 
 ## v0.1.0 (2026-09-24)
 

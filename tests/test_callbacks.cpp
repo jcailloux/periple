@@ -309,12 +309,25 @@ void test_protocol_branch_and_bound_logging() {
 	assert(pruned.log.size() < cb.log.size() && "the default bound must prune part of the tree");
 }
 
-// During construction the context exposes the placed prefix.
+// During construction the context exposes the placed prefix and its inverse
+// index, indexed by city: a placed city may be numbered past the prefix.
 struct SeesPrefix {
+	std::size_t cities;
+
+	template <typename CityT, typename Ctx>
+	void sees(const AppendMove<CityT>& m, const Ctx& ctx) const {
+		assert(ctx.tour().size() == m.pos && "construction must expose the placed prefix");
+		assert(ctx.position().size() == cities && "the inverse index must cover every city");
+		for (std::size_t p = 0; p < m.pos; ++p)
+			assert(ctx.position()[ctx.tour()[p]] == p && "the inverse index must give each placed city's position");
+	}
+
+	template <typename CityT, typename Ctx>
+	void move_prepare(const AppendMove<CityT>& m, Ctx& ctx) const { sees(m, ctx); }
+
 	template <typename CityT, typename Ctx>
 	bool move_filter(const AppendMove<CityT>& m, const Ctx& ctx) const {
-		assert(ctx.tour().size() == m.pos && "construction must expose the placed prefix");
-		assert(ctx.position().size() == m.pos && "and its inverse index");
+		sees(m, ctx);
 		return true;
 	}
 
@@ -324,10 +337,18 @@ struct SeesPrefix {
 
 void test_protocol_construction_sees_prefix() {
 	auto mat = make_mat4();
-	SeesPrefix variant;
+	SeesPrefix variant{4};
 	Solver solver(mat, variant);
 	solver.nearest_neighbor();
 	assert(solver.status() == SolutionStatus::feasible && "SeesPrefix rejects nothing, so the construction must complete");
+
+	std::vector<std::size_t> prefix = {0, 3};
+	solver.set_tour(prefix);  // replays the prefix as a construction
+	assert(solver.status() == SolutionStatus::partial && "set_tour must hold the prefix");
+	solver.branch_and_bound();
+	assert(solver.status() == SolutionStatus::optimal && "branch_and_bound must complete the search");
+	solver.held_karp();  // its start city is placed as by append, its tour rebuilt by replay
+	assert(solver.status() == SolutionStatus::optimal && "held_karp must complete the search");
 }
 
 // ---------------------------------------------------------------------------
@@ -876,6 +897,18 @@ void test_position_accessor() {
 	assert(pos[1] == 3); // city 1 at position 3
 }
 
+// A partial tour indexes its placed cities by city, past its length.
+void test_position_partial_tour() {
+	auto mat = make_mat4();
+	Solver solver(mat);
+	assert(solver.position().empty() && "position() is empty while the tour is");
+
+	solver.append(0).append(3);
+	auto pos = solver.position();
+	assert(pos.size() == 4 && "position() must cover every city");
+	assert(pos[0] == 0 && pos[3] == 1 && "city 3 must be at position 1");
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -929,6 +962,7 @@ int main() {
 		{"evaluate_append_filtered",     test_evaluate_append_filtered},
 		// Unit - position
 		{"position_accessor",            test_position_accessor},
+		{"position_partial_tour",        test_position_partial_tour},
 	};
 
 	for (const auto& t : tests) {
