@@ -71,7 +71,7 @@ Each algorithm family defines its own move types. Variant callbacks provide over
 
 | Move type | Algorithm family | Fields |
 |---|---|---|
-| `AppendMove<CityT>` | Constructive (NN, greedy), branch and bound + closing edge + replay | `city` |
+| `AppendMove<CityT>` | Constructive (NN, greedy), branch and bound + closing edge + replay | `city`, placed at position `pos` after `prev_city`; the closing edge has `pos == size()` and the first city as `city` |
 | `DPMove<CityT>` | Exact (Held-Karp) | `from`, `to`, `set` |
 
 `DPMove::set` is a bitmask of visited cities (includes `from`, excludes `to`). Its `from_state` and `to_state` index the DP state of the dimensions ([Writing your own dimension](VARIANTS.md#writing-your-own-dimension)).
@@ -119,19 +119,18 @@ struct MyVariant {
 };
 ```
 
-If the variant has no `dimension` typedef, the Solver uses `EmptyContext` (no dimensions, just `cost_delta`).
-
 `RouteTiming` is the built-in dimension provided by Periple. It tracks `arrival` and `departure` times per position (constructive) or per DP state.
 
 ### context_for deduction
 
-The Solver deduces the context type automatically:
+The Solver deduces the context type automatically. Without a variant, `EmptyContext` holds no dimension, just `cost_delta`; every variant gets [`CumulativeCost`](#local-search-and-replay) first, then its own dimensions, each once:
 
 | Variant | Context |
 |---|---|
 | `NoCallbacks` | `EmptyContext<CityT, CostT>` |
-| `using dimension = T` | `EvalContext<CityT, CostT, T>` |
-| `using dimension = Dimensions<Ts...>` | `EvalContext<CityT, CostT, Ts...>` |
+| no `dimension` typedef | `EvalContext<CityT, CostT, CumulativeCost>` |
+| `using dimension = T` | `EvalContext<CityT, CostT, CumulativeCost, T>` |
+| `using dimension = Dimensions<Ts...>` | `EvalContext<CityT, CostT, CumulativeCost, Ts...>` |
 
 ## Composition
 
@@ -150,7 +149,7 @@ Solver solver(matrix, variant);
 - Merges and deduplicates dimensions from all variants
 - Returns the I-th variant from `component<I>()`, counted from 0 in the order passed
 
-Convention: place adjusters (ServiceTimes) before verifiers (Strict) so that filters see the adjusted state.
+Every `move_filter` runs after every `move_prepare`, so filters see the state that all components leave, whatever their order. The order matters only between two `move_prepare` when one reads what the other writes: put the writer first.
 
 > **Important**: `Composed` stores pointers to the composed variants. The variant objects must outlive the `Composed` instance. Always use named variables, not temporaries:
 > ```cpp
@@ -224,8 +223,8 @@ Three built-in bounds, all computed on raw distances: a variant with negative pe
 
 | Bound | Instances | Per node |
 |---|---|---|
-| `SpanningTreeBound` | symmetric distances | up to its member `iterations` (default 30) minimum spanning trees over the remaining cities, O(n^2) each |
-| `SpanningArborescenceBound` | any | up to its member `iterations` (default 30) minimum arborescences over the remaining cities, O(n^2) each |
+| `SpanningTreeBound` | symmetric distances | up to `iterations + 1` minimum spanning trees over the remaining cities, O(n^2) each; member `iterations`, default 30 |
+| `SpanningArborescenceBound` | any | up to `iterations + 1` minimum arborescences over the remaining cities, O(n^2) each; member `iterations`, default 30 |
 | `AssignmentBound` | any | at most two shortest augmenting paths, O(n^2) each; O(n^3) once, at the root |
 
 `branch_and_bound()` uses `SpanningTreeBound` on distances declared symmetric ([Symmetry](DISTANCE_SOURCES.md#symmetry)) and `SpanningArborescenceBound` otherwise, inside `time_windows::DeadlineBound` under strict time windows (below). [CHOOSING_A_SOLVER.md](CHOOSING_A_SOLVER.md) gives what each one reaches, and when to pass `AssignmentBound`. Each bound has its own header, named after it, in `periple/algorithms/branch_and_bound/`; `branch_and_bound.hpp` includes those of `branch_and_bound()`.
@@ -298,14 +297,14 @@ Any variant gets a `CumulativeCost` dimension automatically. It holds the commit
 
 | Method | Description |
 |---|---|
-| `prefix_cost(pos)` | Committed cost of `tour[0..pos]`, penalties included. O(1) |
-| `evaluate_reversal(i, j)` | Cost of the tour with `tour[i+1..j]` reversed, `nullopt` if a filter rejects it. Leaves the evaluation staged. O(n - i) |
-| `accept_reversal(i, j, cost)` | Applies a scored reversal: commits the staged dimensions, then reverses. O(j - i) |
-| `evaluate_replay(city_at, from, prefix)` | Same for an arbitrary rewrite: `city_at(pos)` returns the candidate city at each position |
+| `prefix_cost(pos)` | Committed cost of `tour[0..pos]`, penalties included. O(1), with a variant only |
+| `evaluate_reversal(i, j)` | Cost of the tour with `tour[i+1..j]` reversed, `nullopt` if a filter rejects it. Leaves the evaluation staged. O(n - i), with a variant only |
+| `accept_reversal(i, j, cost)` | Applies a scored reversal: commits the staged dimensions, then reverses. O(j - i) without a variant, O(n - i) with one |
+| `evaluate_replay(city_at, from, prefix)` | Same for an arbitrary rewrite of `tour[from..]`, with `1 <= from < size()`: `city_at(pos)` returns the candidate city at each position, and `prefix` is the cost of `tour[0..from-1]`: `prefix_cost(from - 1)`, or `path_cost(0, from - 1)` without a variant |
 | `accept_replay(city_at, from, cost)` | Applies a scored rewrite. `city_at` must not read `solver.tour()`, which it overwrites as it goes |
 | `save_staging()` | Keeps the current evaluation as the candidate to commit, so a further one does not overwrite it. Best improvement needs it, first improvement does not |
 | `discard_staging()` | Drops a staged evaluation that was not accepted |
-| `path_cost(from, to)` | Raw distance along the tour between two positions, either direction. O(1), requires no variant |
+| `path_cost(from, to)` | Raw distance along the tour between two positions, either direction. O(1), without a variant only |
 
 A complete operator, first improvement over the neighbor lists:
 
@@ -394,6 +393,8 @@ The solver's `symmetric()` describes the distances alone, as the source declares
 | Exact (Held-Karp) | yes | yes |
 | Exact (branch and bound) | yes | yes |
 | Local search (2-opt) | yes | yes (replayed as `AppendMove`) |
+
+Two primitives reject a variant at compile time: `rotate_to_front`, since rotating changes the traversal order, hence arrival times and penalties, and `path_cost`, which sums raw distances; `prefix_cost` is its counterpart under a variant.
 
 ## Variants
 

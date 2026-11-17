@@ -87,6 +87,7 @@ Copy the `include/periple/` directory into your project and add it to your inclu
 ## TSPLIB file loading
 
 ```cpp
+#include <periple/periple.hpp>
 #include <periple/io/tsplib_parser.hpp>
 
 auto dist = periple::load_tsplib("berlin52.tsp");
@@ -94,7 +95,7 @@ periple::Solver solver(dist);
 solver.nearest_neighbor();
 ```
 
-`load_tsplib` returns a precomputed `DistanceMatrix<int>` with O(1) lookups, declared symmetric unless the file's `TYPE` is `ATSP`. It handles all supported TSPLIB formats: EUC_2D, GEO, ATT, CEIL_2D, EXPLICIT (LOWER_DIAG_ROW, UPPER_ROW, FULL_MATRIX).
+`load_tsplib` returns a precomputed `DistanceMatrix<int>` with O(1) lookups, declared symmetric unless the file's `TYPE` is `ATSP`. It handles all supported TSPLIB formats: EUC_2D, GEO, ATT, CEIL_2D, EXPLICIT (LOWER_DIAG_ROW, UPPER_ROW, FULL_MATRIX). Both loaders also read from a `std::istream&`, and throw `std::runtime_error` on a file they cannot open, read or support.
 
 > [!TIP]
 > For very large instances (N > 10000) where the O(N^2) matrix would exceed available memory, `load_tsplib_coords` returns a `CoordinateDistance` that computes distances on the fly with O(N) storage:
@@ -112,7 +113,7 @@ solver.nearest_neighbor({.start_city = 2});
 auto tour = solver.tour();
 auto cost = solver.cost();
 
-solver.held_karp();              // replaces the tour with the optimal one
+solver.branch_and_bound();       // replaces the tour with the optimal one
 auto status = solver.status();   // SolutionStatus::optimal
 ```
 
@@ -166,7 +167,7 @@ See [CALLBACKS.md](CALLBACKS.md) for the callback architecture and [VARIANTS.md]
 | Algorithm | Category | Complexity | ATSP support |
 |-----------|----------|------------|--------------|
 | Nearest neighbor | Construction | O(n^2) | full |
-| Held-Karp | Exact | O(n^2 * 2^n), n <= 25; with `ReachableSets`, O(n^2) per visited set reached, n <= 64 | full |
+| Held-Karp | Exact | O(n^2 * 2^n), n <= 25; with `ReachableSets`, O(n^2) per visited set reached, n <= 64; with `ReachableLabels`, the same sets, with every partial tour that no other dominates | full |
 | Branch and bound | Exact | exponential worst case, O(n^2) per node | full |
 | 2-opt | Improvement | O(n * k) per pass | adapted |
 
@@ -208,10 +209,11 @@ These are building blocks that require a user-supplied strategy. Complexity and 
 
 ### Selective includes
 
-Include only the algorithms you use:
+Include the solver, your distance source and only the algorithms you use:
 
 ```cpp
 #include <periple/core/solver.hpp>
+#include <periple/distance/matrix.hpp>
 #include <periple/algorithms/nearest_neighbor.hpp>
 ```
 
@@ -230,6 +232,8 @@ Load a TSPLIB instance and use `dist(i, j)` as a black box:
 
 ```cpp
 #include <periple/io/tsplib_parser.hpp>
+
+#include <numeric>
 
 auto dist = periple::load_tsplib("berlin52.tsp");
 std::size_t n = dist.size();
@@ -303,10 +307,10 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, sym
 
 | Method | Description |
 |--------|-------------|
-| `Solver(dist)` | Create a solver bound to a distance source (template deduced) |
+| `Solver(dist)` | Create a solver bound to a distance source (template deduced); the source must outlive the solver |
 | `Solver(dist, variant)` | Create with variant callbacks; the variant must outlive the solver |
 | `Solver()` | Create an empty solver (requires explicit template parameter) |
-| `set_matrix(dist)` | Bind (or rebind) to a distance source, clearing any solution |
+| `set_matrix(dist)` | Bind (or rebind) to a distance source, clearing any solution; the source must outlive the solver |
 | `set_variant(v)` | Set or change the variant, clearing any solution; to start from the current tour, copy it and pass it to `set_tour` afterwards |
 | `set_symmetric(bool)` | Override the source's symmetry declaration until the next `set_matrix`. `true` is checked in debug |
 | `set_symmetric(bool, unchecked)` | Same, without the debug check |
@@ -319,12 +323,27 @@ See [DISTANCE_SOURCES.md](DISTANCE_SOURCES.md) for all construction formats, sym
 |--------|---------|-------------|
 | `status()` | `SolutionStatus` | `none`, `partial`, `feasible`, `optimal`, or `infeasible` |
 | `tour()` | `span<const city_type>` | Zero-copy view of the current tour |
+| `position()` | `span<const city_type>` | Position in the tour of each placed city, indexed by city |
+| `is_visited(city)` | `bool` | Whether `city` is in the tour |
 | `cost()` | `cost_type` | Cost of the current tour |
 | `size()` | `std::size_t` | Number of cities |
+| `distance(i, j)` | `cost_type` | Distance from `i` to `j`, read from the source |
+| `neighbors(city, k)` | `span<const city_type>` | The `k` nearest cities to `city`, nearest first, computed on first use for the current source |
 | `symmetric()` | `bool` | Whether the distances are declared symmetric, by the source or `set_symmetric` |
 | `variant()` | `const Variant&` | The variant set on the solver |
 | `set_tour(span)` | `void` | Inject a tour (full or partial prefix), `infeasible` if `move_filter` rejects one of its moves ([Partial tours](CALLBACKS.md#partial-tours)) |
-| `rotate_to_front(city)` | `void` | Rotate a complete tour so `city` comes first, at equal cost |
+| `set_tour(span, known_cost)` | `void` | Same, with `known_cost` as the cost |
+| `rotate_to_front(city)` | `void` | Rotate a complete tour so `city` comes first, at equal cost; without a variant only, since rotating changes arrival times and penalties |
+
+### Construction
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `evaluate_append(city)` | `std::optional<double>` | Cost of the edge to `city`, penalty included, `nullopt` if `move_filter` rejects it; changes nothing |
+| `can_append(city)` | `bool` | Whether `move_filter` accepts appending `city` |
+| `append(city)` | `Solver&` | Append `city` to a `none` or `partial` tour without calling `move_filter`: check `can_append` first. The last city closes the tour, `infeasible` if `move_filter` rejects the return to the first |
+
+The primitives that score and apply a rewrite of a complete tour are in [Local search and replay](CALLBACKS.md#local-search-and-replay).
 
 ### Algorithms
 

@@ -1,6 +1,6 @@
 # Distance sources
 
-Periple is generic over distance sources. Any type satisfying the `DistanceSource` concept works with the `Solver` and all algorithms. The library ships several built-in sources, and you can provide your own.
+Periple is generic over distance sources. Any type satisfying the `DistanceSource` concept works with the `Solver` and all algorithms. The library ships several built-in sources, and you can provide your own. The solver, like `JonkerVolgenantView`, keeps a pointer to its source, which must outlive it.
 
 A tour's cost adds up in the source's `cost_type`, penalties included, so that type must hold the cost of any tour: for large integer costs, take `std::int64_t`.
 
@@ -23,10 +23,11 @@ sym.set(0, 1, 10);
 sym.set(0, 2, 15);
 ```
 
-Both can also be built from a `std::vector<std::vector<T>>` or a flat `std::vector<T>`:
+Both can also be built from a `std::vector<std::vector<T>>`, and `DistanceMatrix` from a flat `std::vector<T>`:
 
 ```cpp
 periple::DistanceMatrix<int> matrix({{0, 10, 15}, {10, 0, 35}, {15, 35, 0}});
+periple::SymmetricDistanceMatrix<int> sym({{0, 10, 15}, {10, 0, 35}, {15, 35, 0}});
 
 std::vector<int> flat = compute_distances();
 periple::DistanceMatrix<int> matrix2(n, std::move(flat));
@@ -60,7 +61,7 @@ CoordinateDistance cd(dim, flat_coords, my_dist_fn);       // flat vector + expl
 `CostT` is deduced from the distance function's return type via CTAD. For example, `euclidean<double>(2)` produces a `CoordinateDistance` with `cost_type = double`, while `euclidean<int>(2)` produces one with `cost_type = int`.
 
 > [!IMPORTANT]
-> Each call to `dist(i, j)` recomputes the distance from coordinates. For algorithms that make many distance queries (2-opt, LK), a precomputed matrix is significantly faster (~1-3 ns lookup vs ~15-25 ns computation for 2D Euclidean). Use `CoordinateDistance` when the matrix would not fit in memory, or when distance computation is cheap relative to the algorithm.
+> Each call to `dist(i, j)` recomputes the distance from coordinates. For algorithms that make many distance queries, such as `two_opt`, a precomputed matrix is significantly faster (~1-3 ns lookup vs ~15-25 ns computation for 2D Euclidean). Use `CoordinateDistance` when the matrix would not fit in memory, or when distance computation is cheap relative to the algorithm.
 
 ## Built-in distance functions
 
@@ -75,7 +76,7 @@ N-dimensional, templated on `CostT`. Each takes a dimension and returns a callab
 | `manhattan<CostT>(dim)` | sum \|a_i - b_i\| | `round` (nearest) |
 | `chebyshev<CostT>(dim)` | max \|a_i - b_i\| | `round` (nearest) |
 
-For floating-point `CostT` (double, float), the exact value is returned with no rounding.
+For floating-point `CostT` (double, float), `ceiling_euclidean` returns the ceiling, and the others the exact value.
 
 ### TSPLIB95-specific functions
 
@@ -87,8 +88,6 @@ These implement the exact formulas from the [TSPLIB95 specification](http://como
 | `tsplib::ceil_2d(a, b)` | CEIL_2D | ceil(L2 norm) |
 | `tsplib::att(a, b)` | ATT | ceil(sqrt(sum/10)), pseudo-Euclidean |
 | `tsplib::geo(a, b)` | GEO | Great-circle, PI=3.141592, R=6378.388 |
-
-`tsplib::geo_to_radians(coord)` is also available for the TSPLIB-specific coordinate-to-radians conversion.
 
 ### Custom distance functions
 
@@ -105,7 +104,7 @@ To declare its symmetry, see [Symmetry](#symmetry).
 
 ## Asymmetric TSP (Jonker-Volgenant)
 
-`JonkerVolgenantView` wraps any asymmetric N-city distance source as a symmetric 2N-city one, enabling symmetric-only algorithms (nearest neighbor, 2-opt, LK, ...) to solve ATSP instances transparently.
+`JonkerVolgenantView` wraps any asymmetric N-city distance source as a symmetric 2N-city one, so that an algorithm written for symmetric distances, such as one of your own, solves ATSP instances. The built-in algorithms take asymmetric distances directly ([Available algorithms](README.md#available-algorithms)).
 
 ```cpp
 #include <periple/distance/jonker_volgenant.hpp>
@@ -143,7 +142,8 @@ struct MyDistance {
     static constexpr bool symmetric() { return true; }  // optional, see Symmetry
 };
 
-periple::Solver solver(MyDistance{/* ... */});
+MyDistance dist{/* ... */};
+periple::Solver solver(dist);  // dist must outlive the solver
 solver.nearest_neighbor();
 ```
 
