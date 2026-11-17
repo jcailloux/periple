@@ -53,6 +53,7 @@
 - `set_tour` and `resume_at` held a tour as `feasible` or `partial` even when `move_filter` rejects one of its moves, and `nearest_neighbor` resumed from a rejected prefix could return as `feasible` a tour that violates the variant. Both now replay the tour through `move_filter` as a construction does and hold a rejected tour as `infeasible`; resumed from one, `nearest_neighbor` and `greedy_construct` return at once.
 - `nearest_neighbor` and `greedy_construct` with `resume_at` equal to `size()` left the complete tour `partial`.
 - `find_package(periple)` could miss an installed periple from a project of another architecture or pointer size (32 or 64 bits) than the build that installed it; a header-only library depends on neither.
+- `JonkerVolgenantView::atsp_tour` returned the reversed ATSP tour, whose cost can differ from `atsp_cost`, from a symmetric tour where each real city follows its ghost, such as the tour of `held_karp()` on the view.
 
 ## v0.1.0 (2026-09-24)
 

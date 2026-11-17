@@ -70,8 +70,11 @@ public:
 		return symmetric_cost + big_m_ * static_cast<cost_type>(n_);
 	}
 
-	// Extract the n-city ATSP tour from a 2n-city symmetric tour.
-	// Exploits real-ghost alternation: stride-2 read, zero branches in loop.
+	// Extract the n-city ATSP tour from a 2n-city symmetric tour, starting at
+	// its first real city. The edge from ghost g+n to real r encodes g -> r, so
+	// the tour reads forward where each real city precedes its ghost, backward
+	// where it follows it. Exploits real-ghost alternation: stride-2 read, zero
+	// branches in the loops.
 	void atsp_tour(std::span<const city_type> sym,
 	               std::span<city_type> out) const {
 		assert(sym.size() == 2 * n_ && "atsp_tour: symmetric tour must have 2n cities");
@@ -79,8 +82,15 @@ public:
 		assert(verify_alternation(sym) && "atsp_tour: tour must alternate real and ghost cities");
 
 		std::size_t start = static_cast<std::size_t>(sym[0]) >= n_ ? 1 : 0;
-		for (std::size_t i = 0; i < n_; ++i)
-			out[i] = sym[start + 2 * i];
+		bool forward = static_cast<std::size_t>(sym[start + 1])
+		            == static_cast<std::size_t>(sym[start]) + n_;
+		out[0] = sym[start];
+		if (forward)
+			for (std::size_t i = 1; i < n_; ++i)
+				out[i] = sym[start + 2 * i];
+		else
+			for (std::size_t i = 1; i < n_; ++i)
+				out[i] = sym[start + 2 * (n_ - i)];
 	}
 
 	[[nodiscard]] auto atsp_tour(std::span<const city_type> sym) const
