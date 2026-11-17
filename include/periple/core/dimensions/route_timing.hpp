@@ -78,17 +78,7 @@ struct RouteTiming {
 		departures[pos_] = departure;
 	}
 
-	struct AppendSnapshot { double arrival, departure; std::size_t pos; };
-
-	template <typename CityT>
-	auto snapshot(const AppendMove<CityT>&) const -> AppendSnapshot {
-		return {arrival, departure, pos_};
-	}
-	void restore(const AppendSnapshot& s) {
-		arrival = s.arrival; departure = s.departure; pos_ = s.pos;
-	}
-
-	// --- DPMove (exact, inline commit, no snapshot) -----------------------
+	// --- DPMove (exact, inline commit) ------------------------------------
 
 	void resize_dp(std::size_t states) {
 		if (dp_departures.size() < states) dp_departures.resize(states);

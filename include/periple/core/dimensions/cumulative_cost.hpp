@@ -65,16 +65,6 @@ struct CumulativeCost {
 	// Inert during a DP: prefix costs are rebuilt from the final tour.
 	template <DistanceSource Dist, typename CityT>
 	void init(const DPMove<CityT>&, const Dist&) {}
-
-	struct AppendSnapshot { double prefix, edge; std::size_t pos; };
-
-	template <typename CityT>
-	auto snapshot(const AppendMove<CityT>&) const -> AppendSnapshot {
-		return {prefix, edge, pos_};
-	}
-	void restore(const AppendSnapshot& s) {
-		prefix = s.prefix; edge = s.edge; pos_ = s.pos;
-	}
 };
 
 } // namespace periple
