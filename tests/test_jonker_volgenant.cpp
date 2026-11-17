@@ -2,7 +2,9 @@
 #include <periple/distance/matrix.hpp>
 #include <periple/core/solver.hpp>
 #include <periple/algorithms/nearest_neighbor.hpp>
+#include <periple/algorithms/held_karp.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -221,6 +223,59 @@ void test_round_trip() {
 		assert(recovered[i] == original[i]);
 }
 
+// A symmetric tour gives the same ATSP tour read in either direction, from any
+// position, starting at its first real city.
+void test_extract_either_direction() {
+	periple::DistanceMatrix<int> m(4, {
+		 0,  2,  9, 10,
+		 1,  0,  6,  4,
+		15,  7,  0,  8,
+		 6,  3, 12,  0
+	});
+	auto jv = periple::jonker_volgenant(m);
+
+	std::vector<std::size_t> original = {2, 0, 3, 1};
+	auto forward = jv.symmetric_tour(std::span<const std::size_t>(original));
+	std::vector<std::size_t> backward(forward.rbegin(), forward.rend());
+
+	for (const auto* cycle : {&forward, &backward}) {
+		for (std::size_t r = 0; r < cycle->size(); ++r) {
+			std::vector<std::size_t> sym(cycle->size());
+			for (std::size_t i = 0; i < sym.size(); ++i)
+				sym[i] = (*cycle)[(r + i) % sym.size()];
+
+			auto first_real = sym[0] < 4 ? sym[0] : sym[1];
+			auto expected = original;
+			std::ranges::rotate(expected, std::ranges::find(expected, first_real));
+
+			auto atsp = jv.atsp_tour(std::span<const std::size_t>(sym));
+			assert(atsp == expected && "atsp_tour must read the ATSP direction from the first real city");
+		}
+	}
+}
+
+// The cost of the extracted tour is the one atsp_cost recovers, whichever
+// direction the solver's tour runs.
+void test_extract_held_karp() {
+	periple::DistanceMatrix<int> m(4, {
+		 0,  2,  9, 10,
+		 1,  0,  6,  4,
+		15,  7,  0,  8,
+		 6,  3, 12,  0
+	});
+	auto jv = periple::jonker_volgenant(m);
+
+	periple::Solver solver(jv);
+	solver.held_karp();
+
+	auto atsp = jv.atsp_tour(solver.tour());
+	int cost = jv.atsp_cost(solver.cost());
+	assert(cost == tour_cost(m, atsp) && "the extracted tour must cost what atsp_cost recovers");
+
+	// Optimal tour 0->2->3->1->0 (cost 21); reversed, it costs 33
+	assert(cost == 21 && "held_karp on the view must reach the ATSP optimum");
+}
+
 void test_vector_overloads() {
 	periple::DistanceMatrix<int> m(3, {
 		 0,  1, 10,
@@ -263,5 +318,7 @@ int main() {
 	test_2city();
 	test_build_symmetric_tour();
 	test_round_trip();
+	test_extract_either_direction();
+	test_extract_held_karp();
 	test_vector_overloads();
 }
