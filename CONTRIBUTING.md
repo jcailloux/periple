@@ -368,7 +368,7 @@ Provide callbacks for `AppendMove` and `DPMove`. A constraint that an exact DP c
 
 ### Step 2: Write tests
 
-Add an entry to `tests/algorithms/variant_registry.hpp`: `test_variants` then runs the variant under every registered algorithm, against the brute-force optimum of the `AppendMove` pipeline. Pin its `held_karp()` engine with a `static_assert` in `tests/algorithms/test_held_karp.cpp`. A variant with a dimension that keeps DP state gets `ReachableLabels`; if the cheapest state per visited set and last city always settles the rest of the tour under it, specialize `detail::cheapest_state_suffices` (`core/moves/dp_move.hpp`), as `ServiceTimes` does. Add focused tests in `tests/` for behaviors specific to the variant.
+Add an entry to `tests/algorithms/variant_registry.hpp`: `test_variants` then runs the variant under every registered algorithm, against the brute-force optimum of the `AppendMove` pipeline. Pin its `held_karp()` engine with a `static_assert` in `tests/algorithms/test_held_karp.cpp`. A variant with a dimension that keeps DP state gets `ReachableLabels`; if the cheapest state per visited set and last city always settles the rest of the tour under it, specialize `detail::cheapest_state_suffices` (`core/moves/dp_move.hpp`), as `ServiceTimes` does. If it never makes a time earlier, specialize `detail::only_delays` (`core/dimensions/route_timing.hpp`), as `ServiceTimes` does, and add its composition with `Strict` to the `detail::dp_deadlines` asserts of `test_held_karp.cpp`: `branch_and_bound()` and `held_karp` then keep their deadline test under that composition. Add focused tests in `tests/` for behaviors specific to the variant.
 
 ### Step 3: Document
 
